@@ -1,0 +1,5 @@
+{
+  "name": "tether-mail",
+  "version": "0.1.0",
+  "description": "Pushes Tether mailbox messages into this Codex session as 'You've got mail' turns (via a SessionStart hook and a detached relay using `codex queue`)."
+}

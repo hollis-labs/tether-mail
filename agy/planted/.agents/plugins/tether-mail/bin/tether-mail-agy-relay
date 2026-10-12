@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Relay Tether mail into one Agy conversation.
+
+Runs tether-mail-watch (push, poll fallback). For each batch of new mail:
+  1. if a mode-0600 <cid>.session file exists (written by tether-mail-agy-register
+     from inside the agent's shell) and the agy process is alive, deliver with
+     `agy agentapi send-message <cid> <framed text>` (wakes an idle session; lands
+     in the running tool result mid-turn);
+  2. otherwise (or if that fails) append to ~/.local/state/tether-mail/agy/<cid>.jsonl,
+     which the PreInvocation / Stop hooks drain.
+One relay per conversation (pidfile); exits when --agy-pid is gone.
+"""
+import argparse, json, os, selectors, subprocess, sys, time
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+import tmail  # noqa: E402
+
+
+def send_message(cid, text, agy):
+    sess = tmail.read_session(cid)
+    if not sess or not sess.get("ls_address") or not sess.get("csrf_token"):
+        return False, "no session file"
+    env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS=sess["ls_address"],
+               ANTIGRAVITY_CSRF_TOKEN=sess["csrf_token"], ANTIGRAVITY_CONVERSATION_ID=cid)
+    try:
+        r = subprocess.run([agy, "agentapi", "send-message", "--title=Tether mail", cid, text],
+                           capture_output=True, text=True, timeout=30, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)[:120]
+    if r.returncode != 0:
+        # never echo output: it could contain request details
+        return False, "send-message exit %d" % r.returncode
+    return True, "ok"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--conversation", required=True)
+    ap.add_argument("--urn", required=True)
+    ap.add_argument("--agy-pid", type=int, required=True)
+    ap.add_argument("--cli", default="tether-remote")
+    ap.add_argument("--agy", default="agy")
+    ap.add_argument("--batch-seconds", type=float, default=1.5)
+    a = ap.parse_args()
+    cid = a.conversation
+
+    pidfile = tmail.path(cid, ".relay.pid")
+    try:
+        old = int(open(pidfile).read().strip())
+        if old != os.getpid() and tmail.alive(old):
+            return
+    except (OSError, ValueError):
+        pass
+    open(pidfile, "w").write(str(os.getpid()))
+
+    proc = subprocess.Popen([sys.executable, os.path.join(tmail.BIN, "tether-mail-watch"),
+                             "--urn", a.urn, "--cli", a.cli],
+                            stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ)
+    batch, deadline = [], None
+    print("relay up cid=%s urn=%s agy=%d" % (cid, a.urn, a.agy_pid), flush=True)
+
+    def deliver():
+        nonlocal batch
+        ok, why = False, "no session"
+        if tmail.read_session(cid) and tmail.alive(a.agy_pid):
+            ok, why = send_message(cid, tmail.frame(batch, a.urn, a.cli), a.agy)
+        if ok:
+            print("sent %d via send-message" % len(batch), flush=True)
+        else:
+            tmail.append_inbox(cid, batch)
+            print("inboxed %d (%s)" % (len(batch), why), flush=True)
+        batch = []
+
+    try:
+        while tmail.alive(a.agy_pid) and proc.poll() is None:
+            for key, _ in sel.select(timeout=1.0):
+                line = key.fileobj.readline()
+                if not line:
+                    return
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if m.get("id"):
+                    batch.append(m)
+                    deadline = deadline or time.monotonic() + a.batch_seconds
+            if batch and deadline and time.monotonic() >= deadline:
+                deliver()
+                deadline = None
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            if open(pidfile).read().strip() == str(os.getpid()):
+                os.remove(pidfile)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

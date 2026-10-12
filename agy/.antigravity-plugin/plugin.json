@@ -1,0 +1,7 @@
+{
+  // Manifest lives in .antigravity-plugin/ (or .gemini-plugin/); JSONC allowed.
+  "name": "tether-mail",
+  "displayName": "Tether Mail",
+  "description": "Delivers new Tether mailbox messages into a running Agy session without the agent polling.",
+  "version": "0.1.0"
+}

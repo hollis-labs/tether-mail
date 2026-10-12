@@ -1,0 +1,23 @@
+{
+  "name": "tether-mail",
+  "version": "0.1.0",
+  "description": "Pushes new Tether mailbox mail into the session as a 'You've got mail' system message (SSE watch, poll fallback).",
+  "userConfig": {
+    "urn": {
+      "type": "string",
+      "title": "Mailbox URN",
+      "description": "e.g. msg://agent/<name>; falls back to $TETHER_AGENT_URN"
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Poll seconds",
+      "description": "Poll interval in seconds when push is unavailable (default 20)"
+    },
+    "cli": {
+      "type": "string",
+      "title": "Tether CLI",
+      "description": "Command used to reach the hub (default tether-remote)",
+      "default": "tether-remote"
+    }
+  }
+}

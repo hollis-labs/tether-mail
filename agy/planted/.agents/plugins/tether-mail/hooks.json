@@ -1,0 +1,18 @@
+{
+  "tether-mail": {
+    "PreInvocation": [
+      { "type": "command", "command": "python3 ./hooks/mail-hook.py pre", "timeout": 20 }
+    ],
+    "Stop": [
+      { "type": "command", "command": "python3 ./hooks/mail-hook.py stop", "timeout": 20 }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          { "type": "command", "command": "python3 ./hooks/mail-hook.py tool", "timeout": 20 }
+        ]
+      }
+    ]
+  }
+}

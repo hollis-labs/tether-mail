@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Relay Tether mail into one Codex thread with `codex queue`.
+
+Runs tether-mail-watch (push, poll fallback) and, for each new message,
+queues an envelope into --thread. `codex queue` starts a turn when the thread
+is idle and waits for the current turn to finish otherwise, so one mechanism
+covers both. Exits when the owning codex process (--parent-pid) is gone, or
+when queueing keeps failing. One relay per thread (pidfile).
+"""
+import argparse, importlib.machinery, importlib.util, json, os, selectors, subprocess, sys, time
+
+sys.dont_write_bytecode = True  # importing the sibling watcher must not drop a __pycache__ in the plugin
+here = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_watch():
+    path = os.path.join(here, "tether-mail-watch")
+    loader = importlib.machinery.SourceFileLoader("tether_mail_watch", path)
+    spec = importlib.util.spec_from_loader("tether_mail_watch", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--thread", required=True)
+    ap.add_argument("--urn", required=True)
+    ap.add_argument("--parent-pid", type=int, required=True)
+    ap.add_argument("--state-dir", required=True)
+    ap.add_argument("--cli", default="tether-remote")
+    ap.add_argument("--codex", default="codex")
+    ap.add_argument("--batch-seconds", type=float, default=1.5)
+    a = ap.parse_args()
+
+    pidfile = os.path.join(a.state_dir, "relay-%s.pid" % a.thread)
+    try:
+        old = int(open(pidfile).read().strip())
+        if old != os.getpid() and alive(old):
+            return  # already relaying this thread
+    except (OSError, ValueError):
+        pass
+    open(pidfile, "w").write(str(os.getpid()))
+
+    watch = load_watch()
+    proc = subprocess.Popen([sys.executable, os.path.join(here, "tether-mail-watch"),
+                             "--urn", a.urn, "--cli", a.cli],
+                            stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ)
+    batch, deadline, failures = [], None, 0
+
+    def deliver():
+        nonlocal batch, failures
+        text = watch.system_message("\n\n".join(watch.envelope(m, a.urn, a.cli) for m in batch))
+        r = subprocess.run([a.codex, "queue", "--thread", a.thread, "--message", text],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            print("queued %d message(s): %s" % (len(batch), r.stdout.strip()), flush=True)
+            batch, failures = [], 0
+        else:
+            failures += 1
+            print("queue failed (%d): %s" % (failures, (r.stderr or r.stdout).strip()[:200]), flush=True)
+
+    try:
+        while True:
+            if not alive(a.parent_pid) or proc.poll() is not None:
+                break
+            for key, _ in sel.select(timeout=1.0):
+                line = key.fileobj.readline()
+                if not line:
+                    return
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if m.get("id"):
+                    batch.append(m)
+                    deadline = deadline or time.monotonic() + a.batch_seconds
+            if batch and deadline and time.monotonic() >= deadline:
+                deliver()
+                deadline = None if not batch else time.monotonic() + 5
+                if failures >= 5:
+                    print("giving up after repeated queue failures", flush=True)
+                    break
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            if open(pidfile).read().strip() == str(os.getpid()):
+                os.remove(pidfile)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()
