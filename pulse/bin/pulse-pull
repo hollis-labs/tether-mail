@@ -1,0 +1,43 @@
+#!/bin/sh
+# pulse-pull <machine-name> <ssh-target|-> [remote-root] [--loop SECONDS]
+# Copy another machine's pulse files into <root>/<machine-name>/ (read-only mirror) and touch .fetched.
+# Pull only: the remote is never written. Needs a non-interactive ssh route (BatchMode, 5 s connect timeout).
+# ssh-target "-" means the remote root is a local path (testing).
+# Remote root default: ~/.local/state/tether-pulse/<machine-name>/ on the target.
+set -u
+name=${1:?machine name}; target=${2:?ssh target or -}; shift 2
+rroot=; loop=0
+while [ $# -gt 0 ]; do
+  case $1 in --loop) loop=${2:?seconds}; shift 2;; *) rroot=$1; shift;; esac
+done
+case $name in */*|.*|'') echo "bad machine name" >&2; exit 2;; esac
+root=${TETHER_PULSE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tether-pulse}
+[ "$name" = "$(hostname -s)" ] && [ -z "${TETHER_PULSE_MACHINE:-}" ] && { echo "refusing to mirror over the local machine dir" >&2; exit 2; }
+[ "$name" = "${TETHER_PULSE_MACHINE:-}" ] && { echo "refusing to mirror over the local machine dir" >&2; exit 2; }
+once() {
+  src=${rroot:-.local/state/tether-pulse/$name}
+  [ "$target" = "-" ] || src="$target:$src"
+  mkdir -p -m 700 "$root" "$root/$name"
+  stage=$(mktemp -d "$root/.stage-XXXXXX") || return 1
+  if [ "$target" = "-" ]; then
+    rsync -a --include='*.json' --exclude='*' "$src/" "$stage/" 2>/dev/null
+  else
+    rsync -a -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2' \
+      --timeout=10 --include='*.json' --exclude='*' "$src/" "$stage/" 2>/dev/null
+  fi
+  rc=$?
+  if [ $rc -eq 0 ]; then
+    chmod 700 "$stage"
+    # replace the mirror's json files with the fresh set; the marker only moves on success
+    find "$root/$name" -maxdepth 1 -name '*.json' -delete
+    find "$stage" -maxdepth 1 -name '*.json' -exec mv {} "$root/$name/" \;
+    touch "$root/$name/.fetched"
+  fi
+  rm -rf "$stage"
+  return $rc
+}
+if [ "$loop" -gt 0 ]; then
+  while :; do once || echo "pulse-pull $name: fetch failed" >&2; sleep "$loop"; done
+else
+  once
+fi

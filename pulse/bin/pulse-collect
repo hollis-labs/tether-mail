@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""tether-pulse collector: one view of live agents on this machine (and any pulled machines).
+
+  pulse-collect            table
+  pulse-collect --json     JSON rows for a frontend
+
+Sources, strongest first:
+  pulse   hook-written files under <root>/<machine>/   (exact state, last action, task)
+  tether  --tether FILE: Tether-managed sessions (pid join; state from live_state when given)
+  claude  ~/.claude/sessions/<pid>.json for sessions with no pulse file   (derived state)
+Other machines' directories (pulled in by rsync/ssh) are read as-is and flagged verified=false.
+Read-only.  Does not read process environments or transcripts.
+"""
+import argparse, json, os, subprocess, sys, time
+
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
+import pulse  # noqa: E402
+
+CLAUDE_STATUS = {"idle": "idle", "busy": "working", "waiting": "waiting"}
+
+
+def ps_table():
+    """{pid: (ppid, comm)} in one call."""
+    out = pulse._ps(["-eo", "pid=,ppid=,comm="], timeout=5)
+    t = {}
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            t[int(parts[0])] = (int(parts[1]), os.path.basename(parts[2].strip()))
+    return t
+
+
+def tmux_panes():
+    try:
+        out = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_pid}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_id}"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except Exception:
+        return {}
+    panes = {}
+    for line in out.splitlines():
+        a = line.split("\t")
+        if len(a) == 4 and a[0].isdigit():
+            panes[int(a[0])] = {"session": a[1], "pane": a[2], "pane_id": a[3]}
+    return panes
+
+
+def pane_for(pid, table, panes):
+    for _ in range(12):
+        if pid in panes:
+            return panes[pid]
+        if pid not in table:
+            return None
+        pid = table[pid][0]
+    return None
+
+
+def row_from_pulse(d, local, table):
+    pid = d.get("pid") or 0
+    verified = None
+    stale = False
+    if local and pid:
+        verified = pulse.alive(pid) and (not d.get("proc_start") or pulse.proc_start(pid) == d.get("proc_start"))
+        stale = not verified
+    return {
+        "machine": d.get("machine"), "source": "pulse", "tool": d.get("tool"), "pid": pid or None,
+        "session_id": d.get("session_id"), "name": None, "cwd": d.get("cwd"),
+        "project": os.path.basename((d.get("cwd") or "").rstrip("/")) or None,
+        "tmux": d.get("tmux"), "state": d.get("state") or "unknown", "waiting_for": d.get("waiting_for") or None,
+        "since": d.get("state_since"), "last_activity": d.get("updated_at"),
+        "last_action": d.get("last_action"), "subagents": d.get("subagents", 0),
+        "task": d.get("task"), "urn": d.get("urn"),
+        "confidence": {"state": "exact", "last_action": "exact", "task": (d.get("task") or {}).get("confidence")},
+        "verified": verified, "stale": stale,
+    }
+
+
+def claude_session_rows(seen_sids, seen_pids, table):
+    d = os.path.expanduser("~/.claude/sessions")
+    rows = []
+    try:
+        names = [n for n in os.listdir(d) if n.endswith(".json")]
+    except OSError:
+        return rows
+    for n in names:
+        j = pulse.read(os.path.join(d, n))
+        pid = j.get("pid")
+        if not isinstance(pid, int) or pid in seen_pids or j.get("sessionId") in seen_sids:
+            continue
+        if not pulse.alive(pid) or table.get(pid, (0, ""))[1] != "claude":
+            continue  # file outlives the process; require a live claude at that pid
+        cwd = j.get("cwd") or ""
+        rows.append({
+            "machine": pulse.machine(), "source": "claude-session-file", "tool": "claude", "pid": pid,
+            "session_id": j.get("sessionId"), "name": j.get("name"), "cwd": cwd,
+            "project": os.path.basename(cwd.rstrip("/")) or None, "tmux": None,
+            "state": CLAUDE_STATUS.get(j.get("status"), "unknown"), "waiting_for": j.get("waitingFor") or None,
+            "since": j.get("statusUpdatedAt") if isinstance(j.get("statusUpdatedAt"), int) else j.get("updatedAt"),
+            "last_activity": j.get("updatedAt"), "last_action": None, "subagents": None, "task": None, "urn": None,
+            "confidence": {"state": "derived", "last_action": "none", "task": "none"},
+            "verified": True, "stale": False,
+        })
+    return rows
+
+
+TETHER_STATE = {"idle": "idle", "processing": "working"}
+
+
+def tether_rows(path, seen_pids, table):
+    """Rows for Tether-managed sessions from a JSON file shaped like tether_session_list
+    ({sessions:[...]}); each session may carry live_state (idle|processing) from session health.
+    Managed workers run as another user, so their own session files are unreadable here."""
+    j = pulse.read(path)
+    rows = []
+    for t in j.get("sessions") or []:
+        pid = t.get("pid")
+        if t.get("state") != "running" or not isinstance(pid, int) or pid in seen_pids or not pulse.alive(pid):
+            continue
+        ls = t.get("live_state")
+        rows.append({
+            "machine": pulse.machine(), "source": "tether", "tool": {"claude-code": "claude"}.get(t.get("provider_id"), t.get("provider_id")),
+            "pid": pid, "session_id": t.get("id"), "name": t.get("logical_agent_id"), "cwd": t.get("workspace"),
+            "project": t.get("project_id"), "tmux": None, "state": TETHER_STATE.get(ls, "unknown"), "waiting_for": None,
+            "since": None, "last_activity": None, "last_action": None, "subagents": None, "task": None, "urn": None,
+            "tether": {"session_id": t.get("id"), "launch_id": t.get("launch_id"), "project_id": t.get("project_id")},
+            "confidence": {"state": "derived" if ls else "none", "last_action": "none", "task": "none"},
+            "verified": True, "stale": False,
+        })
+    return rows
+
+
+def collect(root, tether_file=None):
+    table, panes = ps_table(), tmux_panes()
+    rows, seen_sids, seen_pids = [], set(), set()
+    try:
+        machines = sorted(os.listdir(root))
+    except OSError:
+        machines = []
+    for m in machines:
+        md = os.path.join(root, m)
+        if not os.path.isdir(md):
+            continue
+        local = m == pulse.machine()
+        fetched = None
+        try:
+            fetched = int(os.path.getmtime(os.path.join(md, ".fetched")) * 1000)
+        except OSError:
+            pass
+        for n in sorted(os.listdir(md)):
+            if not n.endswith(".json"):
+                continue
+            r = row_from_pulse(pulse.read(os.path.join(md, n)), local, table)
+            if not r["machine"]:
+                r["machine"] = m
+            r["fetched_at"] = None if local else fetched
+            rows.append(r)
+            if local and r["pid"]:
+                seen_pids.add(r["pid"])
+                seen_sids.add(r["session_id"])
+    rows += claude_session_rows(seen_sids, seen_pids, table)
+    if tether_file:
+        rows += tether_rows(tether_file, seen_pids | {r["pid"] for r in rows if r.get("pid")}, table)
+    for r in rows:
+        if r["machine"] == pulse.machine() and r["pid"] and not r.get("tmux"):
+            r["tmux"] = pane_for(r["pid"], table, panes)
+    rows = [r for r in rows if not r["stale"]]
+    order = {"waiting": 0, "working": 1, "idle": 2, "unknown": 3}
+    rows.sort(key=lambda r: (r["machine"] or "", order.get(r["state"], 3), (r.get("tmux") or {}).get("session") or "", r["tool"] or ""))
+    return rows
+
+
+def ago(ms):
+    if not ms:
+        return "-"
+    s = max(0, int(time.time() - ms / 1000))
+    return "%ds" % s if s < 90 else "%dm" % (s // 60) if s < 5400 else "%dh" % (s // 3600)
+
+
+def table_out(rows):
+    cols = ["MACHINE", "TOOL", "WHERE", "PROJECT", "STATE", "FOR", "LAST ACTION", "TASK", "SRC"]
+    out = [cols]
+    for r in rows:
+        tm = r.get("tmux") or {}
+        where = (tm.get("session") or "-") + ((":" + tm["pane"]) if tm.get("pane") else "")
+        la = r.get("last_action") or {}
+        act = (la.get("tool", "") + " " + la.get("target", "")).strip()[:44] or "-"
+        task = (r.get("task") or {})
+        t = (task.get("id") or "-") + ("?" if task.get("confidence") == "inferred" else "")
+        st = r["state"] + ((" (%s)" % r["waiting_for"]) if r.get("waiting_for") else "")
+        out.append([r["machine"] or "-", r["tool"] or "-", where, (r["project"] or "-")[:24], st, ago(r["since"]), act, t,
+                    {"pulse": "hook", "tether": "tether"}.get(r["source"], "file")])
+    w = [max(len(row[i]) for row in out) for i in range(len(cols))]
+    return "\n".join("  ".join(c.ljust(w[i]) for i, c in enumerate(row)).rstrip() for row in out)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--root", default=pulse.root())
+    ap.add_argument("--tether", metavar="FILE", help="JSON from tether_session_list (+ optional live_state per session) to merge")
+    a = ap.parse_args()
+    rows = collect(a.root, a.tether)
+    if a.json:
+        print(json.dumps({"v": 1, "generated_at": pulse.now_ms(), "rows": rows}, ensure_ascii=False, indent=1))
+    else:
+        print(table_out(rows))
+
+
+main()

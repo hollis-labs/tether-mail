@@ -1,0 +1,39 @@
+# Verified on codex-cli 0.162.1 via `codex exec -c hooks.<Event>=[...]`: SessionStart, UserPromptSubmit,
+# PreToolUse, PostToolUse, Stop.  PermissionRequest not exercised (needs an approval prompt).
+# Put in ~/.codex/config.toml (hook trust review may apply), replacing /ABS/PATH.
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python3 -I /ABS/PATH/TO/tether-mail/pulse/hooks/pulse-hook.py codex"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "python3 -I /ABS/PATH/TO/tether-mail/pulse/hooks/pulse-hook.py codex"
+timeout = 5
+
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 -I /ABS/PATH/TO/tether-mail/pulse/hooks/pulse-hook.py codex"
+timeout = 5
+
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "python3 -I /ABS/PATH/TO/tether-mail/pulse/hooks/pulse-hook.py codex"
+timeout = 5
+
+[[hooks.PermissionRequest]]
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "python3 -I /ABS/PATH/TO/tether-mail/pulse/hooks/pulse-hook.py codex"
+timeout = 5
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 -I /ABS/PATH/TO/tether-mail/pulse/hooks/pulse-hook.py codex"
+timeout = 5
+
