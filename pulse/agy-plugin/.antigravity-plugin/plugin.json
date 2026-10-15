@@ -1,0 +1,6 @@
+{
+  "name": "tether-pulse",
+  "displayName": "Tether Pulse",
+  "description": "Records this agent's working/idle state and last action to local disk (tether-pulse). No network.",
+  "version": "0.1.0"
+}

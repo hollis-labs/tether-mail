@@ -9,6 +9,7 @@ Torque epic EP-20261014-0001). No network, no prompt bodies, secrets masked.
 - `bin/pulse-collect [--json]` - table or JSON rows. Falls back to `~/.claude/sessions/<pid>.json`
   for Claude sessions that have no pulse file yet (state derived, no last action).
 - `claude/settings-hooks.snippet.json` - merge into `~/.claude/settings.json` (replace /ABS/PATH).
+- `agy-plugin/` - global Agy install: `agy plugin install pulse/agy-plugin` (hook command uses `$HOME/dev/projects/tether-mail/pulse/...`, so clone there or edit `hooks.json`). Verified on agy 1.3.3: installed with a scratch HOME, `agy -p` produced the same row as the workspace-plugin test. Prefer this over the snippet.
 - `agy/hooks.snippet.json` - named hook for Agy (replace /ABS/PATH). Verified on agy 1.3.3 (`agy --dangerously-skip-permissions -p=...` in a planted `.agents/plugins/<name>/`): PreInvocation, PreToolUse/PostToolUse (matcher `.*`; the flat no-matcher form did NOT fire for tools), Stop. Hook inherits agy's env. A headless run whose tool is auto-denied never reaches Stop (row stays `working` until the pid dies).
 - `codex/hooks.snippet.toml` - for `~/.codex/config.toml` (replace /ABS/PATH). Verified on codex-cli 0.162.1 end to end (`codex exec -c hooks.X=...`): SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop; payloads match Claude's (`tool_name`, `tool_input`, `session_id`). PermissionRequest not exercised; SessionEnd not exercised (dead pids are dropped by the collector anyway).
 

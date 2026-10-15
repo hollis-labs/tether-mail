@@ -1,0 +1,42 @@
+{
+  "tether-pulse": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 -I $HOME/dev/projects/tether-mail/pulse/hooks/pulse-hook.py agy PreInvocation",
+        "timeout": 5
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I $HOME/dev/projects/tether-mail/pulse/hooks/pulse-hook.py agy PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I $HOME/dev/projects/tether-mail/pulse/hooks/pulse-hook.py agy PostToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 -I $HOME/dev/projects/tether-mail/pulse/hooks/pulse-hook.py agy Stop",
+        "timeout": 5
+      }
+    ]
+  }
+}
