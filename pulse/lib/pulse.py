@@ -14,8 +14,31 @@ _SECRET = re.compile(r"(?i)(sk-[A-Za-z0-9_\-]{12,}|bearer\s+[A-Za-z0-9._\-]{12,}
 _OPAQUE = re.compile(r"(?<![A-Za-z0-9/._~\-])[A-Za-z0-9_\-]{32,}(?![A-Za-z0-9/._~\-])")
 
 
+_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def worker_label(root=None):
+    """The label the Tether worker on this machine reports to the hub, or "".
+
+    The worker reads <root>/<machine> to relay activity, and the hub names the machine by this
+    label, so hooks must write under the same name. A hook started outside a shell that exports
+    TETHER_PULSE_MACHINE (Codex or Agy launched from a terminal, say) would otherwise fall back to
+    the hostname and land where the worker never looks. The label is a directory name, so only a
+    plain name is accepted.
+    """
+    path = os.path.join(root or os.path.expanduser("~/.tether-worker"), "config.json")
+    try:
+        with open(path) as f:
+            label = json.load(f).get("label")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return label if isinstance(label, str) and _LABEL.fullmatch(label) else ""
+
+
 def machine():
-    return os.environ.get("TETHER_PULSE_MACHINE") or socket.gethostname().split(".")[0]
+    """TETHER_PULSE_MACHINE, else the Tether worker's label, else the short hostname."""
+    return (os.environ.get("TETHER_PULSE_MACHINE") or worker_label()
+            or socket.gethostname().split(".")[0])
 
 
 def root():
