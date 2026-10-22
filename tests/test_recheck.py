@@ -97,6 +97,58 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(ids, ["m1"])
 
 
+class CodexRelayTest(unittest.TestCase):
+    """The relay batches streamed mail and queues it into the codex thread; mail read while it
+    sat in the batch must not be queued. A fake codex records its `queue` calls."""
+
+    RELAY = os.path.join(ROOT, "codex", "bin", "tether-mail-codex-relay")
+
+    def run_relay(self, cli):
+        self.addCleanup(cli.dir.cleanup)
+        d = cli.dir.name
+        codex = os.path.join(d, "codex")
+        with open(codex, "w") as f:
+            f.write('#!/bin/sh\necho "$@" >> "%s/queued"\n' % d)
+        os.chmod(codex, os.stat(codex).st_mode | stat.S_IEXEC)
+        parent = subprocess.Popen(["sleep", "30"])  # stands in for the codex process the relay follows
+        self.addCleanup(parent.kill)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("TETHER_")}
+        relay = subprocess.Popen([sys.executable, self.RELAY, "--thread", "t1", "--urn", URN, "--parent-pid", str(parent.pid),
+                                  "--state-dir", d, "--cli", cli.path, "--codex", codex, "--batch-seconds", "0.3"],
+                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            relay.wait(timeout=4)  # the fake stream ends, so the relay exits on its own
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            if relay.poll() is None:
+                relay.terminate()
+            relay.wait(timeout=5)
+        queued = os.path.join(d, "queued")
+        relay.stdout.close()
+        relay.stderr.close()
+        parent.kill()
+        parent.wait()
+        if not os.path.exists(queued):
+            return ""
+        with open(queued) as f:
+            return f.read()
+
+    def test_mail_read_while_batched_is_not_queued(self):
+        self.assertEqual(self.run_relay(FakeCLI(unread=[], stream=["m1"])), "")
+
+    def test_mail_still_unread_is_queued_once(self):
+        out = self.run_relay(FakeCLI(unread=["m1"], stream=["m1"]))
+        self.assertEqual(out.count("queue --thread t1"), 1)
+        self.assertIn("m1", out)
+
+    def test_only_the_unread_part_of_a_batch_is_queued(self):
+        out = self.run_relay(FakeCLI(unread=["keep"], stream=["gone", "keep"]))
+        self.assertEqual(out.count("queue --thread t1"), 1)
+        self.assertIn("keep", out)
+        self.assertNotIn("gone", out)
+
+
 class AgyTest(unittest.TestCase):
     def test_agy_inbox_drops_mail_read_while_it_waited(self):
         os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp()
