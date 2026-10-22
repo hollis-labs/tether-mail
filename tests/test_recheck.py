@@ -26,7 +26,10 @@ class FakeCLI:
         # changing while mail sits in a relay's batch.
         for k, ids in enumerate(unread_by_call or []):
             with open(os.path.join(d, "unread.%d.json" % (k + 1)), "w") as f:
-                json.dump([{"id": i, "from": "f", "subject": "s", "body": "b"} for i in ids], f)
+                if isinstance(ids, str):
+                    f.write(ids)  # raw stdout, valid or not
+                else:
+                    json.dump([{"id": i, "from": "f", "subject": "s", "body": "b"} for i in ids], f)
         self.n_by_call = len(unread_by_call or [])
         self.calls = os.path.join(d, "calls")
         with open(os.path.join(d, "unread.json"), "w") as f:
@@ -175,6 +178,41 @@ class CodexRelayTest(unittest.TestCase):
         out = self.run_relay(FakeCLI(unread_by_call=[["m1"], ["m1"]]))
         self.assertEqual(out.count("queue --thread t1"), 1)
         self.assertIn("m1", out)
+
+
+class MalformedAnswerPathTest(unittest.TestCase):
+    """Reviewer hold on #3: a malformed but successful answer must neither end the Codex relay's
+    delivery nor lose mail the Agy hook already drained from its inbox file."""
+
+    BAD = ['{"messages":"bad"}', '{"messages":[null]}', '{}', '{"messages":[{}]}']
+
+    def test_codex_relay_still_queues_when_the_recheck_answer_is_malformed(self):
+        for bad in self.BAD:
+            with self.subTest(stdout=bad):
+                relay = CodexRelayTest("run_relay")
+                out = relay.run_relay(FakeCLI(unread_by_call=[["m1"], bad]))
+                self.assertEqual(out.count("queue --thread t1"), 1, out)
+                self.assertIn("m1", out)
+
+    def test_agy_hook_still_injects_drained_mail_when_the_recheck_answer_is_malformed(self):
+        hook = os.path.join(ROOT, "agy", "hooks", "mail-hook.py")
+        for bad in self.BAD:
+            for mode in ("pre", "stop"):
+                with self.subTest(stdout=bad, mode=mode):
+                    cli = FakeCLI(list_out=bad)
+                    self.addCleanup(cli.dir.cleanup)
+                    state = tempfile.mkdtemp()
+                    base = os.path.join(state, "tether-mail", "agy")
+                    os.makedirs(base, mode=0o700)
+                    with open(os.path.join(base, "c1.jsonl"), "w") as f:
+                        f.write(json.dumps({"id": "m1", "from": "f", "subject": "s", "body": "b"}) + "\n")
+                    env = {k: v for k, v in os.environ.items() if not k.startswith(("TETHER_", "ANTIGRAVITY_"))}
+                    env.update(TETHER_MAIL_CLI=cli.path, TETHER_AGENT_URN=URN, XDG_STATE_HOME=state)
+                    r = subprocess.run([sys.executable, hook, mode], input=json.dumps({"conversationId": "c1"}),
+                                       env=env, capture_output=True, text=True, timeout=20)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertIn("m1", r.stdout, "drained mail was lost: " + r.stdout + r.stderr)
+                    self.assertNotIn("hook error", r.stderr)
 
 
 class AgyTest(unittest.TestCase):
