@@ -180,6 +180,17 @@ class CodexRelayTest(unittest.TestCase):
         self.assertIn("m1", out)
 
 
+class RelayBurstTest(unittest.TestCase):
+    """A burst of messages in one pipe write must all reach the batch, not only the first."""
+
+    def test_every_message_of_a_burst_is_queued(self):
+        ids = ["b%d" % i for i in range(6)]
+        relay = CodexRelayTest("run_relay")
+        out = relay.run_relay(FakeCLI(unread_by_call=[ids, ids]))
+        for i in ids:
+            self.assertIn(i, out, "message %s of a burst was never queued:\n%s" % (i, out))
+
+
 class MalformedAnswerPathTest(unittest.TestCase):
     """Reviewer hold on #3: a malformed but successful answer must neither end the Codex relay's
     delivery nor lose mail the Agy hook already drained from its inbox file."""
