@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Codex SessionStart hook: start the mail relay for this thread, detached.
 
-Quiet no-op unless a mailbox URN is configured ($TETHER_AGENT_URN). On success
-prints one short line, which Codex adds to the model's context.
+Quiet no-op unless a mailbox URN is configured ($TETHER_AGENT_URN), and always a
+no-op in a hub-hosted session ($TETHER_HOSTED_SESSION set): the hub wakes those itself,
+so a relay would deliver every message twice (CW-20261021-0029). On success prints one
+short line, which Codex adds to the model's context.
 """
 import json, os, subprocess, sys
 
@@ -31,6 +33,8 @@ def main():
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         payload = {}
+    if os.environ.get("TETHER_HOSTED_SESSION", "").strip() and os.environ.get("TETHER_MAIL_ALLOW_HOSTED") != "1":
+        return
     urn = os.environ.get("TETHER_AGENT_URN", "").strip()
     thread = payload.get("session_id") or payload.get("thread_id") or ""
     if not urn or not thread:

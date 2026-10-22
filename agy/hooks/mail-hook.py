@@ -9,7 +9,9 @@
         agent's own shell command with tether-mail-agy-register, which runs in agy's
         tool environment (the only place ANTIGRAVITY_LS_ADDRESS/_CSRF_TOKEN exist).
 
-Quiet no-op unless $TETHER_AGENT_URN is set. Always exits 0 with JSON on stdout.
+Quiet no-op unless $TETHER_AGENT_URN is set, and always a no-op in a hub-hosted session
+($TETHER_HOSTED_SESSION set): the hub wakes those itself, so a second injector would
+deliver every message twice (CW-20261021-0029). Always exits 0 with JSON on stdout.
 """
 import json, os, subprocess, sys
 
@@ -19,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
 import tmail  # noqa: E402
 
 URN = os.environ.get("TETHER_AGENT_URN", "").strip()
+HOSTED = bool(os.environ.get("TETHER_HOSTED_SESSION", "").strip()) and os.environ.get("TETHER_MAIL_ALLOW_HOSTED") != "1"
 CLI = os.environ.get("TETHER_MAIL_CLI", "tether-remote")
 DECISION = "ask"
 KIND = os.environ.get("TETHER_MAIL_AGY_INJECT", "system")  # system | ephemeral | user
@@ -56,7 +59,7 @@ def main():
         payload = {}
     cid = payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
     out = {}
-    if not URN or not cid:
+    if HOSTED or not URN or not cid:
         if mode != "tool":
             print("{}")
         return

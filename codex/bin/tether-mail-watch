@@ -8,6 +8,11 @@ If the hub has no such route (the CLI exits 4 / 404), it falls back to polling
 `<cli> messages list <urn> --unread-only --json` and retries push every 10 min.
 Consumers (the Claude mod, tmux agents, plain shells) never see the difference.
 
+Hub-hosted sessions are skipped: the hub sets TETHER_HOSTED_SESSION in the process of
+every session it manages, and it wakes those sessions itself, so a second injector here
+would deliver every message twice (CW-20261021-0029). The watcher then exits 0 at once
+with a note on stderr. TETHER_MAIL_ALLOW_HOSTED=1 overrides, for deliberate use only.
+
 Output (stdout, line-buffered):
   --format json      {"id","from","subject","body"}   one per line (default)
   --format envelope  the boxed 'You've got mail' text, blank-line separated
@@ -101,7 +106,17 @@ def system_message(text):
             "</system-message>")
 
 
+def hosted():
+    """True inside a session the hub manages (and therefore wakes) itself."""
+    return bool(os.environ.get("TETHER_HOSTED_SESSION", "").strip()) \
+        and os.environ.get("TETHER_MAIL_ALLOW_HOSTED") != "1"
+
+
 def main():
+    if hosted():
+        print("tether-mail-watch: hub-hosted session (TETHER_HOSTED_SESSION set); "
+              "the hub wake delivers its mail, not starting", file=sys.stderr, flush=True)
+        return
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--urn", default=os.environ.get("TETHER_AGENT_URN"))
     ap.add_argument("--cli", default=os.environ.get("TETHER_MAIL_CLI", "tether-remote"))

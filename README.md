@@ -14,6 +14,26 @@ Envelope format ("You've got mail" box + exact read/mark commands) is shared.
 - `codex/bin/tether-mail-codex-relay` — per-thread, single-instance (pidfile), batches 1.5 s, exits when the codex pid is gone.
 - `codex/hooks/session-start.py` — reads `session_id` (== thread id), needs `$TETHER_AGENT_URN`, prints one context line.
 
+## Hub-hosted sessions (one injector per session)
+A session the Tether hub manages gets `TETHER_HOSTED_SESSION=<session id>` in its process
+environment (daemon launches and worker-hosted launches both) and is woken by the hub's own
+mailbox wake turn. Every piece here therefore does nothing when that variable is set: the
+watchers exit 0 at once without polling, the Claude mod starts no watcher, and the Codex
+and Agy hooks start no relay and inject nothing. Without it a hosted session got each
+message twice (hub wake plus plugin), and N times when N sessions share a URN
+(CW-20261021-0029). `TETHER_MAIL_ALLOW_HOSTED=1` overrides, for deliberate use only.
+The plugin stays the delivery path for plain local sessions (no marker).
+
+Known risk, stated plainly: in a hosted session the hub wake is the only push. If the hub
+cannot wake it (no live session resolved for the address, the session is busy for a long
+time, the hub is down), the message waits in the inbox until the agent pulls it; there is no
+second injector to cover the gap. The wake retries on its own, and the agent's inbox-check
+procedure is the backstop.
+
+Deployed copies: this repo is distributed by copying it into each agent's
+`plugins/tether-mail` directory, so a merged change reaches an agent only when its copy is
+updated.
+
 ## Not verified
 - Installing as a real Codex plugin (`codex plugin ...`, `.codex-plugin/plugin.json` schema, `$PLUGIN_ROOT` expansion in hook commands, `/hooks` trust review). Tested only via `-c hooks.SessionStart=[...]` + `--dangerously-bypass-hook-trust`.
 - Mid-turn delivery through the relay (the `codex queue` semantics were verified separately: queued until the running turn ends).

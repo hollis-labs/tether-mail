@@ -9,6 +9,11 @@ const clip = (s: string, n: number) => {
   return one.length > n ? one.slice(0, n - 1) + '…' : one
 }
 
+// True inside a session the hub manages (and wakes) itself: a second injector here would
+// deliver every message twice (CW-20261021-0029). TETHER_MAIL_ALLOW_HOSTED=1 overrides.
+export const isHosted = (hostedSession?: string, allow?: string) =>
+  !!hostedSession?.trim() && allow !== '1'
+
 export const parseLine = (line: string): Mail | undefined => {
   try {
     const j = JSON.parse(line)
@@ -85,6 +90,10 @@ export const register: Register = (on, options) => {
   let stopped = false
 
   on('session.start', async ($, e, next) => {
+    if (isHosted(await $.env.get('TETHER_HOSTED_SESSION'), await $.env.get('TETHER_MAIL_ALLOW_HOSTED'))) {
+      $.ui.status('hub-hosted: mail arrives by the hub wake')
+      return next(e)
+    }
     const urn = String(options.urn || (await $.env.get('TETHER_AGENT_URN')) || '')
     if (!urn) {
       $.ui.status('no URN (set userConfig.urn or $TETHER_AGENT_URN)')
