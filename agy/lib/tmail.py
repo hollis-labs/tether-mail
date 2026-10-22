@@ -81,6 +81,12 @@ def append_inbox(cid, mails):
                 f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
 
+def unread_only(mails, urn, cli="tether-remote"):
+    """Drop mail the mailbox shows as already read: it sat in the inbox file until the next
+    hook, and injecting it then would show the agent a message it has handled."""
+    return load_watch().filter_unread(cli, urn, mails)
+
+
 def drain_inbox(cid):
     """Atomically take everything from the inbox (rename, then read)."""
     src = path(cid, ".jsonl")
