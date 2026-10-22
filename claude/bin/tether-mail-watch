@@ -51,20 +51,31 @@ def filter_unread(cli, urn, mails):
     """
     if not mails:
         return []
+    keep_all = list(mails)
     try:
         r = subprocess.run(
             [cli, "messages", "list", urn, "--unread-only", "--limit", str(RECHECK_LIMIT), "--json"],
             capture_output=True, text=True, timeout=20)
-        if r.returncode != 0:
-            return list(mails)
-        data = json.loads(r.stdout or "{}")
-        rows = data if isinstance(data, list) else (data.get("messages") or [])
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return keep_all
+        data = json.loads(r.stdout)
+        # Only two shapes are an answer: a list, or {"messages": <list or null>}. Anything else
+        # ({}, {"messages": "bad"}, a scalar) is unreadable, and unreadable delivers.
+        if isinstance(data, dict) and "messages" in data:
+            data = data["messages"] if data["messages"] is not None else []
+        if not isinstance(data, list):
+            return keep_all
+        unread = set()
+        for row in data:
+            rid = row.get("id") if isinstance(row, dict) else None
+            if not isinstance(rid, str) or not rid:
+                return keep_all  # a row without a usable id: the page cannot be trusted
+            unread.add(rid)
+        if len(data) >= RECHECK_LIMIT:
+            return keep_all
+        return [m for m in mails if m.get("id") in unread]
     except Exception:
-        return list(mails)
-    if len(rows) >= RECHECK_LIMIT:
-        return list(mails)
-    unread = {m.get("id") for m in rows}
-    return [m for m in mails if m.get("id") in unread]
+        return keep_all
 
 
 def still_unread(cli, urn, mail_id):

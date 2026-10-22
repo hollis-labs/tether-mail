@@ -36,8 +36,9 @@ when it drains its inbox file) asks the mailbox which of the batch is still unre
 `messages list --unread-only` call, and drops what is not: a streamed message can be read
 between the hub pushing it and this process printing it, and mail waiting in a batch or an
 inbox file is stale by the time it is delivered (CW-20261021-0029). The check fails open: a
-CLI error, an unreadable answer, or a full page of 100 that does not show the id (it may be
-past the page) still delivers. Limit: the message object carries no read state, so the
+CLI error, an empty or unreadable answer (anything that is not a list, or `{"messages": list-or-null}`
+of rows with string ids), or a full page of 100 that does not show the id (it may be past the
+page) still delivers; only a well-formed answer that does not list the id drops it. Limit: the message object carries no read state, so the
 unread list is the evidence; the Claude mod's `$.prompt.submit` queues text behind a running
 turn and has no hook to cancel it later, so only the moment of injection is checked.
 

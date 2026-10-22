@@ -30,7 +30,10 @@ class FakeCLI:
         self.n_by_call = len(unread_by_call or [])
         self.calls = os.path.join(d, "calls")
         with open(os.path.join(d, "unread.json"), "w") as f:
-            json.dump([{"id": i, "from": "f", "subject": "s", "body": "b"} for i in unread] if list_out is None else list_out, f)
+            if isinstance(list_out, str):
+                f.write(list_out)  # raw stdout, valid or not
+            else:
+                json.dump([{"id": i, "from": "f", "subject": "s", "body": "b"} for i in unread] if list_out is None else list_out, f)
         with open(os.path.join(d, "stream.jsonl"), "w") as f:
             for i in stream:
                 f.write(json.dumps({"id": i, "seq": 1, "from": "f", "subject": "s", "body": "b"}) + "\n")
@@ -77,6 +80,24 @@ class FilterTest(unittest.TestCase):
     def test_a_full_page_without_the_id_delivers(self):
         full = [{"id": "x%d" % i} for i in range(self.w.RECHECK_LIMIT)]
         self.assertEqual(self.keep(FakeCLI(list_out=full), ["late"]), ["late"])
+
+    def test_malformed_answers_deliver_everything(self):
+        # Reviewer hold on #3: every one of these used to raise or silently drop the batch.
+        for out in ['{"messages":"bad"}', '{"messages":[null]}', '{}', '{"messages":[{}]}', '[{}]', '[1]', '[null]',
+                    '[{"id":5}]', '[{"id":""}]', 'null', '5', '"str"', '{"messages":5}', '{"messages":{"id":"a"}}',
+                    '', '   ', '[{"id":"a"},{"x":1}]']:
+            with self.subTest(stdout=out):
+                self.assertEqual(self.keep(FakeCLI(list_out=out), ["a", "b"]), ["a", "b"])
+
+    def test_valid_empty_answers_still_mean_nothing_is_unread(self):
+        for out in ['[]', '{"messages":[]}', '{"messages":null}']:
+            with self.subTest(stdout=out):
+                self.assertEqual(self.keep(FakeCLI(list_out=out), ["a"]), [])
+
+    def test_both_valid_shapes_are_understood(self):
+        for out in ['[{"id":"a"}]', '{"messages":[{"id":"a"}]}']:
+            with self.subTest(stdout=out):
+                self.assertEqual(self.keep(FakeCLI(list_out=out), ["a", "b"]), ["a"])
 
     def test_empty_batch_makes_no_call(self):
         cli = FakeCLI()
