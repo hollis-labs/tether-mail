@@ -42,9 +42,17 @@ page) still delivers; only a well-formed answer that does not list the id drops 
 unread list is the evidence; the Claude mod's `$.prompt.submit` queues text behind a running
 turn and has no hook to cancel it later, so only the moment of injection is checked.
 
-Deployed copies: this repo is distributed by copying it into each agent's
-`plugins/tether-mail` directory, so a merged change reaches an agent only when its copy is
-updated.
+Deployed copies: this repo is distributed by copying it, so a merged change reaches a session
+only when the copy that session loads is updated. There are several: each agent's
+`plugins/tether-mail` directory, and **on a worker host the global copy
+`~/.claude/skills/tether-mail`, which is what every hosted Claude session there loads**. A release
+that adds the hosted stand-down (or any other behaviour) must be copied to that host copy too;
+until then hosted sessions there keep running the old plugin and receive each message twice (seen
+live on 2026-10-22 with a copy dated 2026-10-14). A running session keeps the environment it was
+launched with and the watcher its plugin already started, so after updating a copy relaunch the
+sessions that should pick it up. Check a session with `ps -eo pid,args | grep tether-mail-watch`
+(a hosted session should have no watcher for its URN) and `grep -c TETHER_HOSTED_SESSION
+<copy>/bin/tether-mail-watch` (non-zero in an updated copy).
 
 ## Not verified
 - Installing as a real Codex plugin (`codex plugin ...`, `.codex-plugin/plugin.json` schema, `$PLUGIN_ROOT` expansion in hook commands, `/hooks` trust review). Tested only via `-c hooks.SessionStart=[...]` + `--dangerously-bypass-hook-trust`.
