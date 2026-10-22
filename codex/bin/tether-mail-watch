@@ -36,6 +36,41 @@ def fetch(cli, urn):
         yield to_mail(m)
 
 
+RECHECK_LIMIT = 100
+
+
+def filter_unread(cli, urn, mails):
+    """The subset of `mails` the mailbox does not positively show as no longer unread.
+
+    A streamed message can be read (by the agent, by another route) between the hub
+    pushing it and this process injecting it, and text queued behind a running turn is
+    stale by the time it runs; injecting it again is how an agent saw the same mail
+    twice (CW-20261021-0029). The message object carries no read state, so the unread
+    list (one call for the whole batch) is the evidence. Fail open: an error, or a full
+    page that does not show an id (it may be past the page), still delivers.
+    """
+    if not mails:
+        return []
+    try:
+        r = subprocess.run(
+            [cli, "messages", "list", urn, "--unread-only", "--limit", str(RECHECK_LIMIT), "--json"],
+            capture_output=True, text=True, timeout=20)
+        if r.returncode != 0:
+            return list(mails)
+        data = json.loads(r.stdout or "{}")
+        rows = data if isinstance(data, list) else (data.get("messages") or [])
+    except Exception:
+        return list(mails)
+    if len(rows) >= RECHECK_LIMIT:
+        return list(mails)
+    unread = {m.get("id") for m in rows}
+    return [m for m in mails if m.get("id") in unread]
+
+
+def still_unread(cli, urn, mail_id):
+    return bool(filter_unread(cli, urn, [{"id": mail_id}]))
+
+
 def to_mail(m):
     """Normalise one message object (list or watch output) to our line shape."""
     p = m.get("payload") or {}
@@ -133,8 +168,13 @@ def main():
     seen = set()
     last_seq = 0
 
-    def emit(m):
+    def emit(m, fresh=False):
+        """fresh: m came from the unread list fetched an instant ago, no recheck needed."""
         if not m["id"] or m["id"] in seen:
+            return
+        if not fresh and not still_unread(a.cli, a.urn, m["id"]):
+            seen.add(m["id"])
+            print("tether-mail-watch: %s is no longer unread; not injecting" % m["id"], file=sys.stderr, flush=True)
             return
         seen.add(m["id"])
         print(json.dumps(m, ensure_ascii=False) if a.format == "json"
@@ -142,7 +182,7 @@ def main():
 
     def poll_once():
         for m in fetch(a.cli, a.urn):
-            emit(m)
+            emit(m, fresh=True)
 
     def safe_poll(report):
         try:

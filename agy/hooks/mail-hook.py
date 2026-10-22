@@ -67,11 +67,11 @@ def main():
     try:
         if mode == "pre":
             ensure_relay(cid)
-            mails = tmail.drain_inbox(cid)
+            mails = tmail.unread_only(tmail.drain_inbox(cid), URN, CLI)
             if mails:
                 out = inject(tmail.frame(mails, URN, CLI))
         elif mode == "stop":
-            mails = tmail.drain_inbox(cid)
+            mails = tmail.unread_only(tmail.drain_inbox(cid), URN, CLI)
             if mails:
                 out = {"decision": "continue", "reason": tmail.frame(mails, URN, CLI)}
         elif mode == "tool":

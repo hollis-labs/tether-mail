@@ -62,6 +62,10 @@ def main():
 
     def deliver():
         nonlocal batch, failures
+        # Mail read while it sat in the 1.5 s batch (or between failed queue attempts) is stale.
+        batch = watch.filter_unread(a.cli, a.urn, batch)
+        if not batch:
+            return
         text = watch.system_message("\n\n".join(watch.envelope(m, a.urn, a.cli) for m in batch))
         r = subprocess.run([a.codex, "queue", "--thread", a.thread, "--message", text],
                            capture_output=True, text=True, timeout=30)
