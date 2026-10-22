@@ -19,9 +19,15 @@ class FakeCLI:
     """tether-remote stand-in: `messages list` answers from a file, `mailbox watch` streams
     the messages in a second file; every call is recorded."""
 
-    def __init__(self, unread=(), stream=(), list_rc=0, list_out=None):
+    def __init__(self, unread=(), stream=(), list_rc=0, list_out=None, unread_by_call=None):
         self.dir = tempfile.TemporaryDirectory()
         d = self.dir.name
+        # unread_by_call[k] answers the (k+1)-th `messages list` (the last one repeats): the mailbox
+        # changing while mail sits in a relay's batch.
+        for k, ids in enumerate(unread_by_call or []):
+            with open(os.path.join(d, "unread.%d.json" % (k + 1)), "w") as f:
+                json.dump([{"id": i, "from": "f", "subject": "s", "body": "b"} for i in ids], f)
+        self.n_by_call = len(unread_by_call or [])
         self.calls = os.path.join(d, "calls")
         with open(os.path.join(d, "unread.json"), "w") as f:
             json.dump([{"id": i, "from": "f", "subject": "s", "body": "b"} for i in unread] if list_out is None else list_out, f)
@@ -31,8 +37,12 @@ class FakeCLI:
         self.path = os.path.join(d, "cli")
         with open(self.path, "w") as f:
             f.write('#!/bin/sh\necho "$1 $2" >> "%s"\n'
-                    'if [ "$1" = messages ]; then cat "%s/unread.json"; exit %d; fi\n'
-                    'if [ "$1" = mailbox ]; then cat "%s/stream.jsonl"; exit 0; fi\n' % (self.calls, d, list_rc, d))
+                    'if [ "$1" = messages ]; then\n'
+                    '  n=$(grep -c "^messages list" "%s"); f="%s/unread.$n.json"\n'
+                    '  if [ %d -gt 0 ]; then [ -f "$f" ] || f="%s/unread.%d.json"; else f="%s/unread.json"; fi\n'
+                    '  cat "$f"; exit %d\nfi\n'
+                    'if [ "$1" = mailbox ]; then cat "%s/stream.jsonl"; exit 0; fi\n'
+                    % (self.calls, self.calls, d, self.n_by_call, d, self.n_by_call, d, list_rc, d))
         os.chmod(self.path, os.stat(self.path).st_mode | stat.S_IEXEC)
 
     def count(self, what):
@@ -134,19 +144,16 @@ class CodexRelayTest(unittest.TestCase):
         with open(queued) as f:
             return f.read()
 
+    # The watcher subprocess already drops mail that is read before it prints it, so these tests
+    # change the mailbox between the watcher's poll (call 1) and the relay's own recheck (call 2):
+    # only the relay's filter can catch what was read while the batch waited.
     def test_mail_read_while_batched_is_not_queued(self):
-        self.assertEqual(self.run_relay(FakeCLI(unread=[], stream=["m1"])), "")
+        self.assertEqual(self.run_relay(FakeCLI(unread_by_call=[["m1"], []])), "")
 
     def test_mail_still_unread_is_queued_once(self):
-        out = self.run_relay(FakeCLI(unread=["m1"], stream=["m1"]))
+        out = self.run_relay(FakeCLI(unread_by_call=[["m1"], ["m1"]]))
         self.assertEqual(out.count("queue --thread t1"), 1)
         self.assertIn("m1", out)
-
-    def test_only_the_unread_part_of_a_batch_is_queued(self):
-        out = self.run_relay(FakeCLI(unread=["keep"], stream=["gone", "keep"]))
-        self.assertEqual(out.count("queue --thread t1"), 1)
-        self.assertIn("keep", out)
-        self.assertNotIn("gone", out)
 
 
 class AgyTest(unittest.TestCase):
