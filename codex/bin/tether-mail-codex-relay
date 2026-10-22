@@ -59,6 +59,10 @@ def main():
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     batch, deadline, failures = [], None, 0
+    # Read the pipe with os.read and split lines ourselves. readline() on the text wrapper pulls
+    # everything available into Python's buffer, where select() cannot see it, so the second
+    # message of a burst sat there until more data arrived (delayed, or lost if none did).
+    fd, pending = proc.stdout.fileno(), b""
 
     def deliver():
         nonlocal batch, failures
@@ -81,16 +85,19 @@ def main():
             if not alive(a.parent_pid) or proc.poll() is not None:
                 break
             for key, _ in sel.select(timeout=1.0):
-                line = key.fileobj.readline()
-                if not line:
+                chunk = os.read(fd, 65536)
+                if not chunk:
                     return
-                try:
-                    m = json.loads(line)
-                except ValueError:
-                    continue
-                if m.get("id"):
-                    batch.append(m)
-                    deadline = deadline or time.monotonic() + a.batch_seconds
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                for line in lines:
+                    try:
+                        m = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(m, dict) and m.get("id"):
+                        batch.append(m)
+                        deadline = deadline or time.monotonic() + a.batch_seconds
             if batch and deadline and time.monotonic() >= deadline:
                 deliver()
                 deadline = None if not batch else time.monotonic() + 5
