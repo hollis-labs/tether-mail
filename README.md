@@ -21,12 +21,14 @@ The Claude mod no longer submits the boxed envelope as a turn per message. Each 
 triaged first, so agent-to-agent chatter stays out of the human's chat.
 
 Classification is a fixed rule table first, the same one Tether's hub triage uses
-(CW-20261114-0017), checked in this order; the first class with a matching rule wins:
+(CW-20261114-0017); the first class with a matching rule wins. A typed envelope is decided by its own
+kind and `awaiting` first, ahead of the tool kind. `attention: agent` decides nothing (Tether's typed
+envelopes may carry it by default).
 
 | Class | How it is chosen | What happens |
 | --- | --- | --- |
 | `human` | `attention: human`, or the sender is the operator (`msg://user/...`); later, the sidecar's `needs_human` | a toast and a band line, `📬 [@sender → you] <subject> · /mail`; no turn; marked read when the human opens `/mail` (or when they ask the agent to handle it) |
-| `action` | `attention: agent`; envelope kind `question`, `decision`, `approval_request`, `escalation` or `handoff`; `awaiting` naming this seat (URN, handle, `TETHER_AGENT_NAME` or `TETHER_AGENT_LABEL`); tool kind `request`, `escalation` or `handoff`; urgency `high`; the model says so; or any triage failure | a background sidecar session handles it (below); the chat gets one band line, `📬 handled 1 mail: replied to @archie (skills list)`; no turn |
+| `action` | envelope kind `question`, `decision`, `approval_request`, `escalation` or `handoff`; `awaiting` naming this seat (URN, handle, `TETHER_AGENT_NAME` or `TETHER_AGENT_LABEL`); untyped tool kind `request`, `escalation` or `handoff`; urgency `high`; the model says so; or any triage failure | a background sidecar session handles it (below); the chat gets one band line, `📬 handled 1 mail: replied to @archie (skills list)`; no turn |
 | `read` | by rule only: `attention: none`, urgency `very-low`, or a pure ack (an ack/receipt kind, a bare message, or a `response`/`notice` whose body is only "thanks", "noted", "ack", "received" and the like) | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
 | `fyi` | envelope kind `update` or `message` with no `awaiting`; tool kind `notice`, `status_update` or `response` at urgency `normal` or lower; or the model says `fyi` **or `read`** | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
 

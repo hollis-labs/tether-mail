@@ -117,8 +117,8 @@ const turns = (w: ReturnType<typeof world>) => w.prompts.filter(p => p.origin ==
 
 test('action mail goes to one sidecar, launched like the seat minus this plugin; the chat gets a band line, no turn', async ($, on) => {
   const w = world(on, { TETHER_AGENT_URN: URN, TETHER_AGENT_LABEL: 'Archie', TETHER_AGENT_NAME: 'architect' }, [
-    mail('a1', 'agent'),
-    mail('a2', 'agent'),
+    mail('a1', '', { kind: 'request' }),
+    mail('a2', '', { kind: 'request' }),
     mail('f1', '', { kind: 'notice' }),
     mail('r1', 'none', { kind: 'ack' }),
   ])
@@ -159,7 +159,7 @@ test('action mail goes to one sidecar, launched like the seat minus this plugin;
 })
 
 test('TETHER_MAIL_SIDECAR_MODEL picks the sidecar model', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR_MODEL: 'haiku' }, [mail('a1', 'agent')])
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR_MODEL: 'haiku' }, [mail('a1', '', { kind: 'request' })])
   await boot($)
   await settle(w)
   const argv = w.sidecars[0]?.argv ?? []
@@ -167,7 +167,7 @@ test('TETHER_MAIL_SIDECAR_MODEL picks the sidecar model', async ($, on) => {
 })
 
 test('a failed sidecar falls back to one compact pointer turn; why is in the pane', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent', { from_handle: 'archie' })], () => ran(1, '', 'boom'))
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request', from_handle: 'archie' })], () => ran(1, '', 'boom'))
   await boot($)
   await settle(w)
 
@@ -180,7 +180,7 @@ test('a failed sidecar falls back to one compact pointer turn; why is in the pan
 })
 
 test('a timed-out sidecar falls back the same way', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], () => ({ deny: 'process timed out' }))
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request' })], () => ({ deny: 'process timed out' }))
   await boot($)
   await settle(w)
   expect(turns(w).length).toBe(1)
@@ -188,7 +188,7 @@ test('a timed-out sidecar falls back the same way', async ($, on) => {
 })
 
 test('needs_main_session makes a compact pointer turn', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], () =>
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request' })], () =>
     sidecarSays([out('a1', { handled: false, summary: 'big refactor asked', needs_main_session: true })]))
   await boot($)
   await settle(w)
@@ -199,7 +199,7 @@ test('needs_main_session makes a compact pointer turn', async ($, on) => {
 })
 
 test("needs_human from the sidecar is treated as human: band and toast, no turn", async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], () =>
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request' })], () =>
     sidecarSays([out('a1', { handled: false, summary: 'wants a prod approval', needs_human: true })]))
   await boot($)
   await settle(w)
@@ -233,7 +233,7 @@ test('human mail: band and toast, no turn, no sidecar; read only when opened in 
 })
 
 test('TETHER_MAIL_SIDECAR=0 keeps the compact pointer turn and starts no sidecar', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [mail('a1', 'agent'), mail('h1', 'human')])
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [mail('a1', '', { kind: 'request' }), mail('h1', 'human')])
   await boot($)
   await settle(w)
   expect(w.sidecars.length).toBe(0)
@@ -245,7 +245,7 @@ test('TETHER_MAIL_SIDECAR=0 keeps the compact pointer turn and starts no sidecar
 })
 
 test('nothing that reaches the main session is a boxed envelope', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [mail('a1', 'agent'), mail('h1', 'human'), mail('f1', '', { kind: 'notice' })])
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [mail('a1', '', { kind: 'request' }), mail('h1', 'human'), mail('f1', '', { kind: 'notice' })])
   await boot($)
   await settle(w)
   await userPrompt($, 'hello')
@@ -324,7 +324,7 @@ test('an FYI does not ride on a prompt a plugin submitted', async ($, on) => {
 })
 
 test('a hub-hosted session starts no watcher and attaches nothing', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_HOSTED_SESSION: 'sess-1' }, [mail('a1', 'agent')])
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_HOSTED_SESSION: 'sess-1' }, [mail('a1', '', { kind: 'request' })])
   await boot($)
   await settle(w)
   await userPrompt($, 'hello')
@@ -335,7 +335,7 @@ test('a hub-hosted session starts no watcher and attaches nothing', async ($, on
 })
 
 test('inside a sidecar the mod stands down: no watcher, no recursion', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR_CHILD: '1' }, [mail('a1', 'agent')])
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR_CHILD: '1' }, [mail('a1', '', { kind: 'request' })])
   await boot($)
   await settle(w)
   expect(w.spawned).toBe(0)
@@ -345,7 +345,7 @@ test('inside a sidecar the mod stands down: no watcher, no recursion', async ($,
 
 test('a mixed batch routes each mail by its own result', async ($, on) => {
   const w = world(on, { TETHER_AGENT_URN: URN }, [
-    mail('a1', 'agent'), mail('a2', 'agent'), mail('a3', 'agent'), mail('a4', 'agent'), mail('a5', 'agent'),
+    mail('a1', '', { kind: 'request' }), mail('a2', '', { kind: 'request' }), mail('a3', '', { kind: 'request' }), mail('a4', '', { kind: 'request' }), mail('a5', '', { kind: 'request' }),
   ], () => sidecarSays([
     out('a1'),
     out('a2', { handled: false, summary: 'prod approval', needs_human: true }),
@@ -377,7 +377,7 @@ test('a mixed batch routes each mail by its own result', async ($, on) => {
 })
 
 test('needs_human on one mail does not pull the others to the human', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent'), mail('a2', 'agent')], () => sidecarSays([
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request' }), mail('a2', '', { kind: 'request' })], () => sidecarSays([
     out('a1', { handled: false, summary: 'approve?', needs_human: true }),
     out('a2', { handled: false, summary: 'needs context', needs_main_session: true }),
   ]))
@@ -388,7 +388,7 @@ test('needs_human on one mail does not pull the others to the human', async ($, 
 })
 
 test('an empty result leaves every mail to the main session', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent'), mail('a2', 'agent')], () => sidecarSays([]))
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request' }), mail('a2', '', { kind: 'request' })], () => sidecarSays([]))
   await boot($)
   await settle(w)
   expect(turns(w)[0]?.text.split('\n').length).toBe(2)
@@ -408,7 +408,7 @@ const MUX_LAUNCH = [
 ].join('\n')
 
 test('a mux-format launch.sh: the boot prompt never reaches the sidecar', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], undefined, MUX_LAUNCH)
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', '', { kind: 'request' })], undefined, MUX_LAUNCH)
   await boot($)
   await settle(w)
   const argv = w.sidecars[0]?.argv ?? []

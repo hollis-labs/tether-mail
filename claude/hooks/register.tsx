@@ -97,11 +97,11 @@ export const isPureAck = (m: Mail) => {
   return REPLY_KINDS.has(kind) && isAckBody(m.body ?? '')
 }
 
-// Deterministic triage: the same table as Tether's hub triage (CW-20261114-0017),
-// checked in priority order: human, action, read, fyi. A rule that matches decides; the
-// model is asked only when none does. `kind` is the tool kind (request, notice, ...);
-// `envelope_kind` is the typed envelope's kind (question, update, ...); a `kind` holding
-// an envelope value counts as one too.
+// Deterministic triage: the same table as Tether's hub triage (CW-20261114-0017). A rule
+// that matches decides; the model is asked only when none does. `kind` is the tool kind
+// (request, notice, ...); `envelope_kind` is the typed envelope's kind (question,
+// update, ...); a `kind` holding an envelope value counts as one too. `attention: agent`
+// decides nothing: Tether's typed envelopes may carry it by default.
 export type Rule = { cls: MailClass; reason: string }
 
 const ENVELOPE_ACTION = new Set(['question', 'decision', 'approval_request', 'escalation', 'handoff'])
@@ -133,26 +133,30 @@ export const awaitsMe = (m: Mail, self: readonly string[] = []) => {
 export const classify = (m: Mail, self: readonly string[] = []): Rule | undefined => {
   const attention = low(m.attention)
   const kind = low(m.kind)
-  const env = low(m.envelope_kind)
   const urgency = urgencyOf(m)
-  const envelope = (set: Set<string>) => (set.has(env) ? env : set.has(kind) ? kind : '')
+  const env = low(m.envelope_kind) || (ENVELOPE_ACTION.has(kind) || ENVELOPE_FYI.has(kind) ? kind : '')
+  const awaited = !!bare(m.awaiting)
 
   if (attention === 'human') return { cls: 'human', reason: 'attention: human' }
   if (low(m.from).startsWith('msg://user/')) return { cls: 'human', reason: 'from the operator' }
 
-  if (attention === 'agent') return { cls: 'action', reason: 'attention: agent' }
-  const asked = envelope(ENVELOPE_ACTION)
-  if (asked) return { cls: 'action', reason: `kind ${asked}` }
+  // A typed envelope: its kind and `awaiting` decide first, ahead of the tool kind.
+  if (env) {
+    if (ENVELOPE_ACTION.has(env)) return { cls: 'action', reason: `kind ${env}` }
+    if (awaitsMe(m, self)) return { cls: 'action', reason: `awaiting ${m.awaiting}` }
+    if (attention === 'none') return { cls: 'read', reason: 'attention: none' }
+    if (ENVELOPE_FYI.has(env) && !awaited) return { cls: 'fyi', reason: `kind ${env}` }
+  }
+
+  // Untyped mail (and an envelope no rule above settled), in priority order.
   if (awaitsMe(m, self)) return { cls: 'action', reason: `awaiting ${m.awaiting}` }
-  if (TOOL_ACTION.has(kind)) return { cls: 'action', reason: `kind ${kind}` }
+  if (!env && TOOL_ACTION.has(kind)) return { cls: 'action', reason: `kind ${kind}` }
   if (urgency === 'high') return { cls: 'action', reason: 'urgency high' }
 
   if (attention === 'none') return { cls: 'read', reason: 'attention: none' }
   if (urgency === 'very-low') return { cls: 'read', reason: 'urgency very-low' }
   if (isPureAck(m)) return { cls: 'read', reason: 'pure acknowledgement' }
 
-  const told = envelope(ENVELOPE_FYI)
-  if (told && !bare(m.awaiting)) return { cls: 'fyi', reason: `kind ${told}` }
   if (TOOL_FYI.has(kind) && AT_MOST_NORMAL.has(urgency)) return { cls: 'fyi', reason: `kind ${kind}` }
   return undefined
 }

@@ -219,9 +219,9 @@ test('handles: explicit handle first, else the last URN segment', () => {
 
 const cls = (over: Partial<Mail>, self: string[] = []) => classify(mail(over), self)?.cls
 
-test('attention maps to a class: human, agent -> action, none -> read', () => {
+test('attention maps to a class: human, none -> read; agent alone decides nothing', () => {
   expect(cls({ attention: 'human' })).toBe('human')
-  expect(cls({ attention: 'agent' })).toBe('action')
+  expect(cls({ attention: 'agent' })).toBeUndefined()
   expect(cls({ attention: 'none' })).toBe('read')
   expect(cls({ attention: 'NONE', kind: 'ack' })).toBe('read')
   expect(cls({ attention: 'none', subject: '', body: '' })).toBe('read')
@@ -260,6 +260,21 @@ test('urgency high is action; very-low is read', () => {
   expect(cls({ urgency: 'high' })).toBe('action')
   expect(cls({ kind: 'notice', urgency: 'very-low' })).toBe('read')
   expect(cls({ kind: 'status_update', urgency: 'very_low' })).toBe('read')
+})
+
+test('a typed envelope with attention: agent (Tether\'s default) is decided by its kind', () => {
+  expect(cls({ kind: 'notice', envelope_kind: 'update', attention: 'agent' })).toBe('fyi')
+  expect(cls({ kind: 'notice', envelope_kind: 'message', attention: 'agent' })).toBe('fyi')
+  expect(cls({ kind: 'notice', envelope_kind: 'question', attention: 'agent' })).toBe('action')
+  // The envelope kind decides ahead of the tool kind.
+  expect(cls({ kind: 'request', envelope_kind: 'update', attention: 'agent' })).toBe('fyi')
+  // ...unless the update awaits this seat.
+  const to = 'msg://agent/agent-mux/agt_me'
+  expect(cls({ to, kind: 'notice', envelope_kind: 'update', attention: 'agent', awaiting: '@agt_me' }, [to])).toBe('action')
+  expect(cls({ kind: 'notice', envelope_kind: 'update', attention: 'none' })).toBe('read')
+  // Untyped mail keeps its rules whatever attention says.
+  expect(cls({ kind: 'notice', attention: 'agent' })).toBe('fyi')
+  expect(cls({ kind: 'request', attention: 'agent' })).toBe('action')
 })
 
 test('updates, notices, status updates and responses are fyi by rule', () => {
@@ -362,9 +377,11 @@ test('escalation, handoff, awaiting and urgency high are action with no model ca
   expect(calls.length).toBe(0)
 })
 
-test('an envelope update is fyi with no model call', async () => {
+test('an envelope update is fyi with no model call, even with attention: agent', async () => {
   const { $, calls } = fakeModel(() => ({ isAnswered: true, text: 'action | x', usage: {} }))
   expect((await triage($, mail({ kind: 'notice', envelope_kind: 'update' }), 'haiku')).cls).toBe('fyi')
+  expect((await triage($, mail({ kind: 'notice', envelope_kind: 'update', attention: 'agent' }), 'haiku')).cls).toBe('fyi')
+  expect((await triage($, mail({ kind: 'notice', envelope_kind: 'question', attention: 'agent' }), 'haiku')).cls).toBe('action')
   expect(calls.length).toBe(0)
 })
 
