@@ -70,23 +70,50 @@ export const handle = (urn?: string, explicit?: string) => {
 }
 
 const ACK_KINDS = new Set(['ack', 'receipt', 'read_receipt', 'delivery_receipt'])
+// Kinds whose body alone may make them a pure acknowledgement.
+const REPLY_KINDS = new Set(['response', 'notice', 'notification'])
+// Every word of an ack-only body comes from here ("Noted, thanks!", "got it", "ack").
+const ACK_WORDS = new Set([
+  'ack', 'acked', 'acknowledged', 'noted', 'received', 'thanks', 'thank', 'you', 'thx', 'ty',
+  'got', 'it', 'ok', 'okay', 'roger', 'cheers', 'will', 'do', 'much', 'many',
+])
+
+// True when the body says nothing but an acknowledgement, at most six words.
+export const isAckBody = (body: string) => {
+  const words = body.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean)
+  return words.length > 0 && words.length <= 6 && words.every(w => ACK_WORDS.has(w))
+}
+
+// A pure acknowledgement, decided by rule and never by the model: an ack/receipt kind,
+// a bare message, or a response/notice whose body is only an ack.
+export const isPureAck = (m: Mail) => {
+  const kind = (m.kind ?? '').trim().toLowerCase()
+  if (ACK_KINDS.has(kind)) return true
+  if (!m.body?.trim() && !m.subject?.trim()) return true
+  return REPLY_KINDS.has(kind) && isAckBody(m.body ?? '')
+}
 
 // The sender's own `attention` decides when present: human -> human, agent -> action,
-// none -> fyi (or read for a bare ack). Anything else: undefined, so the model decides.
+// none -> fyi (or read for a pure ack). Anything else: undefined, so the rules and the
+// model decide.
 export const fromAttention = (m: Mail): MailClass | undefined => {
   switch ((m.attention ?? '').trim().toLowerCase()) {
     case 'human':
       return 'human'
     case 'agent':
       return 'action'
-    case 'none': {
-      const bare = !m.body?.trim() && !m.subject?.trim()
-      return ACK_KINDS.has((m.kind ?? '').toLowerCase()) || bare ? 'read' : 'fyi'
-    }
+    case 'none':
+      return isPureAck(m) ? 'read' : 'fyi'
     default:
       return undefined
   }
 }
+
+// Only a sender's `attention: none` or a pure ack may be `read` (marked read unseen).
+// A model `read` is downgraded to `fyi`: a wrong or injected verdict then costs one line
+// on the next prompt instead of losing the message.
+export const guardRead = (v: Verdict): Verdict =>
+  v.cls === 'read' ? { ...v, cls: 'fyi', note: 'model said read; kept as fyi' } : v
 
 export const TRIAGE_SYSTEM = [
   'You triage one mailbox message delivered to an AI agent seat. Reply with exactly one line:',
@@ -122,13 +149,16 @@ export const parseVerdict = (text: string): Verdict | undefined => {
   return { cls, summary: clip(m[2] ?? '', 100) }
 }
 
-const fallbackSummary = (m: Mail) => clip(m.subject || m.body || '(no subject)', 100)
+// Never the body: no message body reaches a turn, by construction.
+const fallbackSummary = (m: Mail) => clip(m.subject || '(no subject)', 100)
 
-// attention first; then a tool-less side call that never touches the transcript;
-// `action` on any failure, so nothing is silently lost.
+// attention first; then the pure-ack rule; then a tool-less side call that never
+// touches the transcript, whose `read` is downgraded to `fyi`; `action` on any
+// failure, so nothing is silently lost.
 export const triage = async ($: EngineInterface, m: Mail, model: string): Promise<Verdict> => {
   const byAttention = fromAttention(m)
   if (byAttention) return { cls: byAttention, summary: fallbackSummary(m) }
+  if (isPureAck(m)) return { cls: 'read', summary: fallbackSummary(m) }
   try {
     const r = await $.model.complete({
       model,
@@ -141,7 +171,7 @@ export const triage = async ($: EngineInterface, m: Mail, model: string): Promis
     if (!r.isAnswered) return { cls: 'action', summary: fallbackSummary(m), note: `triage: ${r.reason}` }
     const v = parseVerdict(r.text)
     if (!v) return { cls: 'action', summary: fallbackSummary(m), note: 'triage: unreadable answer' }
-    return { ...v, summary: v.summary || fallbackSummary(m) }
+    return guardRead({ ...v, summary: v.summary || fallbackSummary(m) })
   } catch (err) {
     return { cls: 'action', summary: fallbackSummary(m), note: `triage: ${String(err).slice(0, 80)}` }
   }
@@ -173,7 +203,7 @@ export const pointerTurn = (items: readonly { m: Mail; v: Verdict }[], urn: stri
     ...items.map(({ m, v }) => pointer(m, v, urn, cli)),
   ]
   if (items.some(({ v }) => v.cls === 'human')) {
-    lines.push('', '[HUMAN] items need Chrispian: put them in front of him plainly.')
+    lines.push('', '[HUMAN] items need the human: put them in front of them plainly.')
   }
   return systemMessage(lines.join('\n'))
 }
@@ -286,7 +316,7 @@ const handleBatch = async ($: EngineInterface, ctx: Ctx, batch: Mail[]) => {
   for (const [i, m] of batch.entries()) {
     const v = verdicts[i] ?? { cls: 'action' as const, summary: fallbackSummary(m) }
     const line = mailLine(m, v.summary, ctx.urn)
-    if (v.note) await note($, ctx, 'note', `${m.id}: ${v.note}; treated as action`)
+    if (v.note) await note($, ctx, 'note', `${m.id}: ${v.note}; treated as ${v.cls}`)
     if (v.cls === 'read') {
       const ok = await markRead($, ctx, m.id)
       await note($, ctx, 'read', ok ? line : `${line} (mark failed; left unread)`)
@@ -309,7 +339,15 @@ const handleBatch = async ($: EngineInterface, ctx: Ctx, batch: Mail[]) => {
     )
   }
   // Queued as its own turn when idle; never folded into a running turn.
-  if (wake.length) await $.prompt.submit({ text: pointerTurn(wake, ctx.urn, ctx.cli) })
+  if (!wake.length) return
+  try {
+    const r = await $.prompt.submit({ text: pointerTurn(wake, ctx.urn, ctx.cli) })
+    if (r.drop !== undefined) throw new Error(r.drop)
+  } catch (err) {
+    // Still unread on the hub (re-emitted when the watcher restarts); the pane says so.
+    const ids = wake.map(w => w.m.id).join(', ')
+    await note($, ctx, 'note', `pointer not submitted (${ids}): ${String(err).slice(0, 80)}`)
+  }
 }
 
 // Collects mail that arrives together (BATCH_MS) so a burst makes at most one turn.

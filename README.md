@@ -20,15 +20,17 @@ triaged first, so agent-to-agent chatter stays out of the human's chat:
 
 | Class | How it is chosen | What happens |
 | --- | --- | --- |
-| `read` | `attention: none` on an ack/receipt, or the model says so | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
-| `fyi` | `attention: none`, or the model says so | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
+| `read` | by rule only: `attention: none` on a pure ack, or a pure ack without `attention` (an ack/receipt kind, a bare message, or a `response`/`notice` whose body is only "thanks", "noted", "ack", "received" and the like) | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
+| `fyi` | `attention: none`, or the model says `fyi` **or `read`** (a model `read` is never trusted to mark mail read unseen) | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
 | `action` | `attention: agent`, the model says so, or any triage failure | one short pointer turn: `Mail <id> from @a → to @b · attention · awaiting`, a summary and the read/mark commands; no body |
 | `human` | `attention: human`, or the model says so | the same pointer, flagged `[HUMAN]`, plus a toast |
 
 Without an `attention` field the mod asks a small model (`$.model.complete`, `haiku` by default,
 `triageModel` option) with a fixed prompt; the call has no tools and never touches the transcript.
 Any error or unreadable answer means `action`, so nothing is dropped silently. Mail arriving within
-1.5 s makes one turn at most. `/mail` opens the pane (unasked it is placed only on a wide terminal).
+1.5 s makes one turn at most; a pointer that fails to submit is noted in the pane and stays unread.
+FYIs ride only on a human's composer or bridge prompt, so a seat no human prompts never sees them;
+they are not lost, they stay unread on the hub. `/mail` opens the pane (unasked it is placed only on a wide terminal).
 The watcher passes `to`, `kind`, `attention`, `awaiting`, `from_handle` and `to_handle` through when a
 message carries them; `@handle` falls back to the URN's last segment.
 

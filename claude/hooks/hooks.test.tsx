@@ -108,6 +108,22 @@ test('the pane logs each message and the band counts waiting FYIs', async ($, on
   await pane.unmount()
 })
 
+test('a model `read` is never marked read unseen; a pure ack is', async ($, on) => {
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'read | looks like thanks', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 'q1', from: 'msg://agent/agent-mux/tether', subject: 'thanks', body: 'thanks! also, can you rotate the token?', kind: 'request' },
+    { id: 'k1', from: 'msg://agent/agent-mux/tether', subject: 'Re: x', body: 'Noted, thanks!', kind: 'response' },
+  ])
+  await boot($)
+  await w.clock.advance(2000)
+
+  expect(w.ran).toEqual([['tether-remote', 'messages', 'read', 'k1', '--as', URN]])
+  expect(w.prompts.length).toBe(0)
+  await userPrompt($, 'hello')
+  expect(w.prompts[0]?.context?.[0]).toContain('(q1)')
+  expect(w.prompts[0]?.context?.[0]).not.toContain('(k1)')
+})
+
 test('an FYI does not ride on a prompt a plugin submitted', async ($, on) => {
   const w = world(on, { TETHER_AGENT_URN: URN }, [mail('f1', 'none')])
   await boot($)

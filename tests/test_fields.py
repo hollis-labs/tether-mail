@@ -34,6 +34,10 @@ class ToMailTest(unittest.TestCase):
         self.assertEqual(m["awaiting"], "@archie")
         self.assertNotIn("from_handle", m)
 
+    def test_hub_metadata_wins_over_the_sender_payload(self):
+        m = self.to_mail({"id": "m1", "payload": {"attention": "human"}, "metadata": {"attention": "none"}})
+        self.assertEqual(m["attention"], "none")
+
     def test_non_string_values_are_dropped(self):
         m = self.to_mail({"id": "m1", "attention": {"x": 1}, "payload": {}})
         self.assertNotIn("attention", m)
