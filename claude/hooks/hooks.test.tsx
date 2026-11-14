@@ -119,7 +119,7 @@ test('action mail goes to one sidecar, launched like the seat minus this plugin;
   const w = world(on, { TETHER_AGENT_URN: URN, TETHER_AGENT_LABEL: 'Archie', TETHER_AGENT_NAME: 'architect' }, [
     mail('a1', 'agent'),
     mail('a2', 'agent'),
-    mail('f1', 'none'),
+    mail('f1', '', { kind: 'notice' }),
     mail('r1', 'none', { kind: 'ack' }),
   ])
   await boot($)
@@ -245,7 +245,7 @@ test('TETHER_MAIL_SIDECAR=0 keeps the compact pointer turn and starts no sidecar
 })
 
 test('nothing that reaches the main session is a boxed envelope', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [mail('a1', 'agent'), mail('h1', 'human'), mail('f1', 'none')])
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [mail('a1', 'agent'), mail('h1', 'human'), mail('f1', '', { kind: 'notice' })])
   await boot($)
   await settle(w)
   await userPrompt($, 'hello')
@@ -259,7 +259,7 @@ test('nothing that reaches the main session is a boxed envelope', async ($, on) 
 })
 
 test('the pane logs each message and the band counts waiting FYIs', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('f1', 'none'), mail('f2', 'none'), mail('r1', 'none', { kind: 'ack' })])
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('f1', '', { kind: 'notice' }), mail('f2', '', { kind: 'notice' }), mail('r1', 'none', { kind: 'ack' })])
   await boot($)
   await settle(w)
   expect(w.prompts.length).toBe(0)
@@ -278,7 +278,7 @@ test('the pane logs each message and the band counts waiting FYIs', async ($, on
 test('a model `read` is never marked read unseen; a pure ack is', async ($, on) => {
   on('model.complete', () => ({ value: { isAnswered: true, text: 'read | looks like thanks', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
   const w = world(on, { TETHER_AGENT_URN: URN }, [
-    { id: 'q1', from: 'msg://agent/agent-mux/tether', subject: 'thanks', body: 'thanks! also, can you rotate the token?', kind: 'request' },
+    { id: 'q1', from: 'msg://agent/agent-mux/tether', subject: 'thanks', body: 'thanks! also, can you rotate the token?' },
     { id: 'k1', from: 'msg://agent/agent-mux/tether', subject: 'Re: x', body: 'Noted, thanks!', kind: 'response' },
   ])
   await boot($)
@@ -291,8 +291,28 @@ test('a model `read` is never marked read unseen; a pure ack is', async ($, on) 
   expect(w.prompts[0]?.context?.[0]).not.toContain('(k1)')
 })
 
+test('an untyped request reaches the sidecar; a model that would call it fyi is never asked', async ($, on) => {
+  let asked = 0
+  on('model.complete', () => {
+    asked += 1
+    return { value: { isAnswered: true, text: 'fyi | design decision', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }
+  })
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 'd1', from: 'msg://agent/agent-mux/agt_lpy0gym4eh', subject: '0017 design: three calls need you', body: 'which option?', kind: 'request' },
+  ])
+  await boot($)
+  await settle(w)
+
+  expect(asked).toBe(0)
+  expect(w.sidecars.length).toBe(1)
+  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['d1'])
+  expect(w.ran).toEqual([])
+  await userPrompt($, 'hello')
+  expect(w.prompts.find(p => p.origin === 'composer')?.context).toBeUndefined()
+})
+
 test('an FYI does not ride on a prompt a plugin submitted', async ($, on) => {
-  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('f1', 'none')])
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('f1', '', { kind: 'notice' })])
   await boot($)
   await settle(w)
 

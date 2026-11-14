@@ -38,6 +38,27 @@ class ToMailTest(unittest.TestCase):
         m = self.to_mail({"id": "m1", "payload": {"attention": "human"}, "metadata": {"attention": "none"}})
         self.assertEqual(m["attention"], "none")
 
+    def test_urgency_comes_from_hub_metadata(self):
+        m = self.to_mail({"id": "m1", "payload": {"urgency": "very-low"}, "metadata": {"urgency": "high"}})
+        self.assertEqual(m["urgency"], "high")
+
+    def test_envelope_kind_is_kept_apart_from_the_tool_kind(self):
+        m = self.to_mail({"id": "m1", "kind": "notice", "payload": {"kind": "question", "body": "b"}})
+        self.assertEqual(m["kind"], "notice")
+        self.assertEqual(m["envelope_kind"], "question")
+        self.assertNotIn("envelope_kind", self.to_mail({"id": "m2", "kind": "request", "payload": {}}))
+
+    def test_every_watcher_copy_passes_the_same_fields(self):
+        msg = {"id": "m1", "kind": "notice", "payload": {"kind": "update"}, "metadata": {"urgency": "low"}}
+        want = self.to_mail(msg)
+        for host in ("codex", "agy"):
+            path = os.path.join(ROOT, host, "bin", "tether-mail-watch")
+            loader = importlib.machinery.SourceFileLoader("tmw_" + host, path)
+            spec = importlib.util.spec_from_loader("tmw_" + host, loader)
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+            self.assertEqual(mod.to_mail(msg), want, host)
+
     def test_non_string_values_are_dropped(self):
         m = self.to_mail({"id": "m1", "attention": {"x": 1}, "payload": {}})
         self.assertNotIn("attention", m)

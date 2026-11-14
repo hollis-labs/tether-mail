@@ -91,13 +91,19 @@ def to_mail(m):
         "body": m.get("body") or p.get("body") or "",
     }
     # Optional routing fields, passed through only when the message carries them: the
-    # Claude mod triages on `attention` and shows `to`/`awaiting` in its pointer. Hub-stamped
-    # metadata wins over the sender-controlled payload.
+    # Claude mod triages on `kind`, `attention`, `awaiting` and `urgency` (Tether stamps it
+    # in metadata) and shows `to` in its pointer. Hub-stamped metadata wins over the
+    # sender-controlled payload.
     meta = m.get("metadata") or {}
-    for k in ("to", "kind", "attention", "awaiting", "from_handle", "to_handle"):
+    for k in ("to", "kind", "attention", "awaiting", "urgency", "from_handle", "to_handle"):
         v = m.get(k) or meta.get(k) or p.get(k)
         if isinstance(v, str) and v:
             out[k] = v
+    # The typed envelope travels in the payload (payload_json) with its own `kind`
+    # (question, update, ...), apart from the tool kind (request, notice, ...) above.
+    ek = p.get("kind") if isinstance(p, dict) else None
+    if isinstance(ek, str) and ek:
+        out["envelope_kind"] = ek
     return out
 
 
