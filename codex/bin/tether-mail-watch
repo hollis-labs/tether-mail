@@ -85,12 +85,21 @@ def still_unread(cli, urn, mail_id):
 def to_mail(m):
     """Normalise one message object (list or watch output) to our line shape."""
     p = m.get("payload") or {}
-    return {
+    out = {
         "id": m.get("id", ""),
         "from": m.get("from") or "unknown",
         "subject": m.get("subject") or p.get("subject") or m.get("kind") or "",
         "body": m.get("body") or p.get("body") or "",
     }
+    # Optional routing fields, passed through only when the message carries them: the
+    # Claude mod triages on `attention` and shows `to`/`awaiting` in its pointer. Hub-stamped
+    # metadata wins over the sender-controlled payload.
+    meta = m.get("metadata") or {}
+    for k in ("to", "kind", "attention", "awaiting", "from_handle", "to_handle"):
+        v = m.get(k) or meta.get(k) or p.get(k)
+        if isinstance(v, str) and v:
+            out[k] = v
+    return out
 
 
 def stream(cli, urn, after_seq, state):
