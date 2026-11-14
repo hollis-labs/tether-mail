@@ -18,23 +18,32 @@ No host gets a boxed envelope any more: the Claude mod keeps agent mail out of t
 
 ## Claude mod: triage before the chat (CW-20261114-0018)
 The Claude mod no longer submits the boxed envelope as a turn per message. Each new message is
-triaged first, so agent-to-agent chatter stays out of the human's chat:
+triaged first, so agent-to-agent chatter stays out of the human's chat.
+
+Classification is a fixed rule table first, the same one Tether's hub triage uses
+(CW-20261114-0017); the first class with a matching rule wins. A typed envelope is decided by its own
+kind, `awaiting` and urgency `high` first, ahead of the tool kind. `attention: agent` decides nothing (Tether's typed
+envelopes may carry it by default).
 
 | Class | How it is chosen | What happens |
 | --- | --- | --- |
-| `read` | by rule only: `attention: none` on a pure ack, or a pure ack without `attention` (an ack/receipt kind, a bare message, or a `response`/`notice` whose body is only "thanks", "noted", "ack", "received" and the like) | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
-| `fyi` | `attention: none`, or the model says `fyi` **or `read`** (a model `read` is never trusted to mark mail read unseen) | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
-| `action` | `attention: agent`, the model says so, or any triage failure | a background sidecar session handles it (below); the chat gets one band line, `📬 handled 1 mail: replied to @archie (skills list)`; no turn |
-| `human` | `attention: human`, the model says so, or the sidecar says `needs_human` | a toast and a band line, `📬 [@sender → you] <subject> · /mail`; no turn; marked read when the human opens `/mail` (or when they ask the agent to handle it) |
+| `human` | `attention: human`, or the sender is the operator (`msg://user/...`); later, the sidecar's `needs_human` | a toast and a band line, `📬 [@sender → you] <subject> · /mail`; no turn; marked read when the human opens `/mail` (or when they ask the agent to handle it) |
+| `action` | envelope kind `question`, `decision`, `approval_request`, `escalation` or `handoff`; `awaiting` naming this seat (URN, handle, `TETHER_AGENT_NAME` or `TETHER_AGENT_LABEL`); untyped tool kind `request`, `escalation` or `handoff`; urgency `high`; the model says so; or any triage failure | a background sidecar session handles it (below); the chat gets one band line, `📬 handled 1 mail: replied to @archie (skills list)`; no turn |
+| `read` | by rule only: `attention: none`, urgency `very-low`, or a pure ack (an ack/receipt kind, a bare message, or a `response`/`notice` whose body is only "thanks", "noted", "ack", "received" and the like) | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
+| `fyi` | envelope kind `update` or `message` with no `awaiting`; tool kind `notice`, `status_update` or `response` at urgency `normal` or lower; or the model says `fyi` **or `read`** | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
 
-Without an `attention` field the mod asks a small model (`$.model.complete`, `haiku` by default,
+A request is never downgraded: every action rule outranks `read` and `fyi`, and none of them asks a
+model. Only when no rule matches does the mod ask a small model (`$.model.complete`, `haiku` by default,
 `triageModel` option) with a fixed prompt; the call has no tools and never touches the transcript.
+It may only answer `action` or `fyi`: a model `read` is kept as `fyi` and a model `human` as `action`.
 Any error or unreadable answer means `action`, so nothing is dropped silently. Mail arriving within
 1.5 s makes one sidecar (or one turn) at most; a pointer that fails to submit is noted in the pane and stays unread.
 FYIs ride only on a human's composer or bridge prompt, so a seat no human prompts never sees them;
 they are not lost, they stay unread on the hub. `/mail` opens the pane (unasked it is placed only on a wide terminal).
-The watcher passes `to`, `kind`, `attention`, `awaiting`, `from_handle` and `to_handle` through when a
-message carries them; `@handle` falls back to the URN's last segment.
+The watcher passes `to`, `kind`, `attention`, `awaiting`, `urgency` (from Tether's metadata),
+`from_handle` and `to_handle` through when a message carries them, and the typed envelope's own kind
+(`payload.kind`) as `envelope_kind`, only for a typed envelope (content type
+`application/vnd.tether.envelope.v1+json`, set by the hub on `tether_message_post`; untyped mail never gets it); `@handle` falls back to the URN's last segment.
 
 ### Action mail: the sidecar (CW-20261114-0018 follow-up)
 Action mail never starts a turn in the main session. The mod runs one short-lived headless
