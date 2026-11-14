@@ -1,7 +1,7 @@
 {
   "name": "tether-mail",
-  "version": "0.2.0",
-  "description": "Triages new Tether mailbox mail (read / fyi / action / human) so agent chatter stays out of the chat: a pane and band for FYIs, a short pointer turn only for mail that needs action.",
+  "version": "0.3.0",
+  "description": "Triages new Tether mailbox mail (read / fyi / action / human) so agent chatter stays out of the chat: action mail goes to a background claude -p sidecar for the seat, human mail to a toast and band, FYIs to a pane and band; at most a one-line pointer reaches the chat.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "urn": {

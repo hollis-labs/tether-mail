@@ -1,7 +1,9 @@
 import { test, expect } from 'claude-code/testing'
+import * as mod from './register'
 import {
-  envelope, fromAttention, fyiContext, handle, isHosted, lineBuffer, mailLine, parseLine,
-  isAckBody, isPureAck, parseVerdict, pointer, pointerTurn, systemMessage, triage, wrapBody,
+  compactLine, fromAttention, fyiContext, handle, handledLine, humanLine, isHosted, isOwnPluginDir,
+  lineBuffer, mailLine, parseLaunch, parseLine, isAckBody, isPureAck, parseSidecar, parseVerdict,
+  pointerTurn, shellWords, sidecarArgv, sidecarPrompt, systemMessage, triage,
 } from './register'
 import type { Mail } from './register'
 import type { EngineInterface } from 'claude-code'
@@ -11,29 +13,104 @@ const mail = (over: Partial<Mail> = {}): Mail => ({
   id: 'm_1', from: 'msg://agent/agent-mux/tether', subject: 'deploy done', body: 'x'.repeat(300), ...over,
 })
 
-test('envelope carries the exact read command and a clipped preview', () => {
-  const out = envelope(
-    { id: 'm_123', from: 'msg://agent/bob', subject: 'hi', body: 'x'.repeat(200) },
-    'msg://agent/me',
-  )
-  expect(out).toContain("YOU'VE GOT MAIL")
-  expect(out).toContain('tether-remote messages get m_123 --as msg://agent/me')
-  expect(out).toContain('…')
+test('a compact line is subject, sender and /mail: no body, id or command', () => {
+  const m = mail({ subject: 'need the skills list', from_handle: 'archie' })
+  expect(compactLine(m)).toBe('📬 need the skills list · from @archie · /mail')
+  expect(compactLine(m, true)).toBe('[HUMAN] 📬 need the skills list · from @archie · /mail')
+  expect(compactLine(mail({ subject: '' }))).toBe('📬 (no subject) · from @tether · /mail')
+  expect(humanLine({ from: '@pm', subject: 'approve the migration' })).toBe('📬 [@pm → you] approve the migration · /mail')
 })
 
-test('envelope no longer tells the model to reply via the mailbox skill', () => {
-  const out = envelope(mail(), URN)
-  expect(out).not.toContain('mailbox skill')
-  expect(out).toContain(`tether-remote messages read m_1 --as ${URN}`)
+test('a pointer turn is one compact line per mail and nothing else', () => {
+  const mails = [mail({ id: 'a', subject: 'do a' }), mail({ id: 'b', subject: 'do b' })]
+  const text = pointerTurn(mails)
+  expect(text.split('\n')).toEqual(['📬 do a · from @tether · /mail', '📬 do b · from @tether · /mail'])
+  for (const absent of ['messages get', 'messages read', 'xxxxxxxxxx', '--as']) expect(text).not.toContain(absent)
 })
 
-test('wrapBody shows short bodies whole and marks a cut after four rows', () => {
-  expect(wrapBody('short one')).toEqual(['short one'])
-  expect(wrapBody('')).toEqual(['(empty)'])
-  const long = wrapBody('word '.repeat(80))
-  expect(long.length).toBe(4)
-  expect(long[3]?.endsWith('…')).toBe(true)
-  expect(wrapBody('x'.repeat(100)).every(r => r.length <= 42)).toBe(true)
+test('no boxed envelope is exported or produced', () => {
+  expect('envelope' in mod).toBe(false)
+  expect('wrapBody' in mod).toBe(false)
+  const outs = [
+    compactLine(mail()), pointerTurn([mail()]), systemMessage('x'),
+    fyiContext([{ id: 'm_1', line: 'l' }]), sidecarPrompt([mail()], { urn: URN, cli: 'tether-remote' }),
+  ]
+  for (const o of outs) {
+    expect(o).not.toContain("YOU'VE GOT MAIL")
+    expect(o).not.toMatch(/[┌┐└┘│├┤]/)
+  }
+})
+
+const LAUNCH = [
+  '#!/usr/bin/env bash',
+  'export PATH="$HOME/.local/bin:$PATH"',
+  'export TETHER_AGENT_NAME=architect',
+  'export TETHER_AGENT_LABEL=Archie',
+  'export TETHER_MAIL_CLI=tether-remote',
+  "export AGENT_PROJECTS='sysadmin,ops'",
+  'export TETHER_AGENT_URN=msg://agent/agent-mux/agt_me',
+  'cd /s/k',
+  "exec claude --setting-sources project,local --settings /s/k/claude-settings.json --strict-mcp-config --mcp-config /s/k/claude-mcp.json --plugin-dir /a/plugins/tether-mail/claude --plugin-dir /a/plugins/sysadmin-context/claude --dangerously-skip-permissions -n Archie --model opus --add-dir /Users/x -- 'You are Archie. Reply with one line.' \"$@\"",
+].join('\n')
+
+test('shellWords reads what shlex.quote writes', () => {
+  expect(shellWords(`a 'b c' "d \\"e\\"" f\\ g "$@"`)).toEqual(['a', 'b c', 'd "e"', 'f g', '$@'])
+  expect(shellWords(`x '' y`)).toEqual(['x', '', 'y'])
+})
+
+test('parseLaunch takes the exec argv and the plain exports', () => {
+  const { argv, env } = parseLaunch(LAUNCH)
+  expect(argv?.[0]).toBe('claude')
+  expect(env).toEqual({
+    TETHER_AGENT_NAME: 'architect', TETHER_AGENT_LABEL: 'Archie', TETHER_MAIL_CLI: 'tether-remote',
+    AGENT_PROJECTS: 'sysadmin,ops', TETHER_AGENT_URN: 'msg://agent/agent-mux/agt_me',
+  })
+})
+
+test('the sidecar argv is the launch argv minus this plugin, name, model and prompt, plus -p json', () => {
+  const argv = sidecarArgv(parseLaunch(LAUNCH).argv, { sdir: '/s/k', model: 'sonnet', prompt: 'PROMPT' })
+  expect(argv.slice(0, 13)).toEqual([
+    'claude', '--setting-sources', 'project,local', '--settings', '/s/k/claude-settings.json',
+    '--strict-mcp-config', '--mcp-config', '/s/k/claude-mcp.json',
+    '--plugin-dir', '/a/plugins/sysadmin-context/claude', '--dangerously-skip-permissions', '--add-dir', '/Users/x',
+  ])
+  expect(argv).not.toContain('/a/plugins/tether-mail/claude')
+  for (const gone of ['-n', 'Archie', 'opus', '$@', 'You are Archie. Reply with one line.']) expect(argv).not.toContain(gone)
+  const tail = argv.slice(13)
+  expect(tail.slice(0, 5)).toEqual(['-p', '--model', 'sonnet', '--output-format', 'json'])
+  expect(tail[5]).toBe('--json-schema')
+  expect(JSON.parse(tail[6] ?? '').required).toEqual(['handled', 'summary', 'needs_human', 'needs_main_session'])
+  expect(tail.slice(7)).toEqual(['--no-session-persistence', '--', 'PROMPT'])
+})
+
+test('without launch.sh the sidecar uses the seat files it finds', () => {
+  const argv = sidecarArgv(undefined, { sdir: '/s/k', model: 'haiku', prompt: 'P', hasSettings: true, hasMcp: false })
+  expect(argv.slice(0, 5)).toEqual(['claude', '--setting-sources', 'project,local', '--settings', '/s/k/claude-settings.json'])
+  expect(argv).not.toContain('--mcp-config')
+  expect(isOwnPluginDir('/x/tether-mail/claude/')).toBe(true)
+  expect(isOwnPluginDir('/x/other', '/x/other')).toBe(true)
+  expect(isOwnPluginDir('/x/tether-mailer/claude')).toBe(false)
+})
+
+test('the sidecar prompt names the ids, the rules and the result fields, never a body', () => {
+  const p = sidecarPrompt([mail({ id: 'm_9', subject: 'skills list?', from_handle: 'archie' })], { urn: URN, cli: 'tm', label: 'Archie', name: 'architect' })
+  expect(p).toContain('Handle these Tether mail ids with the mailbox skill: m_9')
+  expect(p).toContain('- m_9 from @archie: skills list?')
+  expect(p).toContain(`tm messages read <id> --as ${URN}`)
+  expect(p).toContain('only if it is small')
+  expect(p).toContain('@handle')
+  for (const f of ['needs_main_session', 'needs_human', 'replied_to', 'summary']) expect(p).toContain(f)
+  expect(p).not.toContain('xxxxxxxxxx')
+})
+
+test('parseSidecar reads structured_output, a JSON result, or reports why not', () => {
+  const ok = { handled: true, summary: 'replied to @archie (skills list)', replied_to: '@archie', needs_human: false, needs_main_session: false }
+  expect(parseSidecar(JSON.stringify({ type: 'result', is_error: false, structured_output: ok }))).toEqual(ok)
+  expect(parseSidecar(JSON.stringify({ type: 'result', result: JSON.stringify(ok) }))).toEqual(ok)
+  expect(parseSidecar('not json')).toEqual({ error: 'unreadable sidecar output' })
+  expect(parseSidecar(JSON.stringify({ is_error: true, result: 'API overloaded' }))).toEqual({ error: 'API overloaded' })
+  expect(parseSidecar(JSON.stringify({ result: 'plain words' }))).toEqual({ error: 'no structured result' })
+  expect(handledLine(1, ok)).toBe('📬 handled 1 mail: replied to @archie (skills list)')
 })
 
 test('lineBuffer joins lines split across chunks', () => {
@@ -176,42 +253,6 @@ test('triage falls back to action on an error, an unreadable answer or no answer
   const v = await triage($, mail(), 'haiku')
   expect(v.cls).toBe('action')
   expect(v.note).toContain('boom')
-})
-
-test('a pointer names who, attention and awaiting, and never the boxed body', () => {
-  const out = pointer(
-    mail({ to: 'msg://agent/agent-mux/archie', attention: 'agent', awaiting: '@archie' }),
-    { cls: 'action', summary: 'please review PR 12' },
-    URN,
-  )
-  expect(out).toContain('Mail m_1 from @tether → to @archie · attention: agent · awaiting: @archie')
-  expect(out).toContain('please review PR 12')
-  expect(out).toContain(`tether-remote messages get m_1 --as ${URN}`)
-  expect(out).not.toContain("YOU'VE GOT MAIL")
-  expect(out).not.toContain('xxxxxxxxxx')
-  expect(out).not.toContain('mailbox skill')
-})
-
-test('a pointer without routing fields falls back to this seat and omits the extras', () => {
-  const out = pointer(mail(), { cls: 'action', summary: 's' }, URN)
-  expect(out).toContain('from @tether → to @agt_me')
-  expect(out).not.toContain('attention:')
-  expect(out).not.toContain('awaiting:')
-})
-
-test('a batch makes one framed turn listing every pointer, human ones flagged', () => {
-  const out = pointerTurn(
-    [
-      { m: mail({ id: 'a' }), v: { cls: 'action', summary: 'do a' } },
-      { m: mail({ id: 'b', attention: 'human' }), v: { cls: 'human', summary: 'decide b' } },
-    ],
-    URN,
-  )
-  expect(out.match(/<system-message/g)?.length).toBe(1)
-  expect(out).toContain('2 new messages for this seat')
-  expect(out).toContain('- Mail a from @tether')
-  expect(out).toContain('- [HUMAN] Mail b from @tether')
-  expect(out).toContain('[HUMAN] items need the human')
 })
 
 test('FYIs ride along as one context block of one-liners', () => {
