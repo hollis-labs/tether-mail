@@ -1,7 +1,8 @@
 {
   "name": "tether-mail",
-  "version": "0.1.0",
-  "description": "Pushes new Tether mailbox mail into the session as a 'You've got mail' system message (SSE watch, poll fallback).",
+  "version": "0.2.0",
+  "description": "Triages new Tether mailbox mail (read / fyi / action / human) so agent chatter stays out of the chat: a pane and band for FYIs, a short pointer turn only for mail that needs action.",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "urn": {
       "type": "string",
@@ -18,6 +19,12 @@
       "title": "Tether CLI",
       "description": "Command used to reach the hub (default tether-remote)",
       "default": "tether-remote"
+    },
+    "triageModel": {
+      "type": "string",
+      "title": "Triage model",
+      "description": "Model for the side triage call when a message carries no attention field (default haiku)",
+      "default": "haiku"
     }
   }
 }

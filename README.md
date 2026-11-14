@@ -5,7 +5,7 @@ Envelope format ("You've got mail" box + exact read/mark commands) is shared.
 
 | Host | Piece | Status |
 | --- | --- | --- |
-| Claude Code | `claude/` — mod (spawns `bin/tether-mail-watch`, `$.prompt.submit`) | working as a hot-reloaded dev mod; not yet tested as an installed plugin |
+| Claude Code | `claude/` — mod (spawns `bin/tether-mail-watch`, triages each message, `$.prompt.submit` only for pointers) | working as a hot-reloaded dev mod; triage covered by `claude plugin test claude`, not yet verified live |
 | Codex | `codex/` — SessionStart hook starts a detached relay; relay uses `codex queue --thread <id>` | idle-session delivery verified live (throwaway tmux Codex, `-c` hook override); relay dies with Codex |
 | Agy | `agy/` — plugin-shaped: PreInvocation/Stop hooks drain a per-conversation inbox; relay uses `agy agentapi send-message` once the session self-registers (PreToolUse rewrite) | active, idle and mid-turn verified in tmux; plugin not installed |
 
@@ -13,6 +13,24 @@ Envelope format ("You've got mail" box + exact read/mark commands) is shared.
 - `*/bin/tether-mail-watch` (claude, codex, agy: byte-identical copies) — one JSON line per new unread message. Default: `<cli> mailbox watch` (SSE, Tether PR hollis-labs/tether#242), polling catch-up, falls back to `messages list --unread-only` when the hub lacks the route (CLI exit 4 / quick failure). Keep the three copies in sync until there is a single source.
 - `codex/bin/tether-mail-codex-relay` — per-thread, single-instance (pidfile), batches 1.5 s, exits when the codex pid is gone.
 - `codex/hooks/session-start.py` — reads `session_id` (== thread id), needs `$TETHER_AGENT_URN`, prints one context line.
+
+## Claude mod: triage before the chat (CW-20261114-0018)
+The Claude mod no longer submits the boxed envelope as a turn per message. Each new message is
+triaged first, so agent-to-agent chatter stays out of the human's chat:
+
+| Class | How it is chosen | What happens |
+| --- | --- | --- |
+| `read` | `attention: none` on an ack/receipt, or the model says so | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
+| `fyi` | `attention: none`, or the model says so | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
+| `action` | `attention: agent`, the model says so, or any triage failure | one short pointer turn: `Mail <id> from @a → to @b · attention · awaiting`, a summary and the read/mark commands; no body |
+| `human` | `attention: human`, or the model says so | the same pointer, flagged `[HUMAN]`, plus a toast |
+
+Without an `attention` field the mod asks a small model (`$.model.complete`, `haiku` by default,
+`triageModel` option) with a fixed prompt; the call has no tools and never touches the transcript.
+Any error or unreadable answer means `action`, so nothing is dropped silently. Mail arriving within
+1.5 s makes one turn at most. `/mail` opens the pane (unasked it is placed only on a wide terminal).
+The watcher passes `to`, `kind`, `attention`, `awaiting`, `from_handle` and `to_handle` through when a
+message carries them; `@handle` falls back to the URN's last segment.
 
 ## Hub-hosted sessions (one injector per session)
 A session the Tether hub manages gets `TETHER_HOSTED_SESSION=<session id>` in its process
