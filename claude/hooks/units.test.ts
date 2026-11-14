@@ -472,10 +472,15 @@ const PROBES = [
   'Authorize the restart of agent-os services', 'Need your ruling on ownership of tether-mail',
   'yes/no: rotate the token', 'LGTM?', 'A) keep\nB) drop', 'Accept the risk on 0038?',
   'Approve?', 'decision needed', 'sign off on this', 'Your call.',
+  // Second review round (da5aaf9): these two reached the sidecar.
+  'What is your answer on 0038, A or B', 'ack and assign 0040 to builder-2',
+  // The rest of the tightened deny list.
+  'this or that', 'show the hosts, keep or drop', 'close 0041', 'take over the cell', 'tell @builder-2 to stop',
+  'reply to @pm with the plan', 'respond to the thread',
 ]
 
-test('the 19 review probes all go to the main session and all hit the deny list', () => {
-  expect(PROBES.length).toBe(19)
+test('the review probes all go to the main session and all hit the deny list', () => {
+  expect(PROBES.length).toBe(28)
   for (const body of PROBES) {
     const m = mail({ kind: 'request', subject: 'request', body })
     expect([body, routineReason(m)]).toEqual([body, undefined])
@@ -501,11 +506,13 @@ test('sidecar only for clearly routine mail: intent routine, or a short untyped 
   expect(routineReason(mail({ envelope_kind: 'request', intent: 'routine', subject: 'nightly digest', body: 'send me the digest' }))).toBe('intent routine')
   expect(routineReason(mail({ envelope_kind: 'request', subject: 'nightly digest', body: 'send me the digest' }))).toBeUndefined()
   expect(routineReason(mail({ envelope_kind: 'request', intent: 'routine', subject: 'x', body: 'OK to merge?' }))).toBeUndefined()
-  for (const body of ['list your skills', "what's the hub version", 'what is your cwd', 'which host runs torque', 'ping', 'status of run 42', 'please confirm receipt', 'ack']) {
+  for (const body of ['list your skills', "what's the hub version", 'what is your cwd', 'which host runs torque', 'ping', 'status of run 42', 'please confirm receipt']) {
     expect([body, routineReason(mail({ kind: 'request', subject: 'request', body }))]).toEqual([body, 'short routine request'])
   }
   // No routine verb, too long, not a request, or typed without intent: main.
   expect(routineReason(mail({ kind: 'request', subject: 'request', body: 'send the log for run 42' }))).toBeUndefined()
+  // A bare "ack" is no longer a routine verb.
+  expect(routineReason(mail({ kind: 'request', subject: 'request', body: 'ack' }))).toBeUndefined()
   expect(routineReason(mail({ kind: 'request', subject: 'request', body: 'list ' + 'x '.repeat(100) }))).toBeUndefined()
   expect(routineReason(mail({ subject: 'list', body: 'list your skills' }))).toBeUndefined()
   expect(mainReason(mail({ kind: 'request', subject: 'request', body: 'send the log' }))).toBe('not clearly routine')

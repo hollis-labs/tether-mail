@@ -508,6 +508,17 @@ test('main by default: a request that is not clearly routine never reaches the s
   expect(await paneHas($, /n1: not clearly routine/)).toBe(true)
 })
 
+test('the two second-round review probes reach the main session, not the sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 'p1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: '', text: 'What is your answer on 0038, A or B' },
+    { id: 'p2', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: '', text: 'ack and assign 0040 to builder-2' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w)[0]?.text.split('\n')).toEqual(['📬 request · from @agt_x · p1 · /mail', '📬 request · from @agt_x · p2 · /mail'])
+})
+
 test('a typed envelope with intent routine goes to the sidecar', async ($, on) => {
   const w = world(on, { TETHER_AGENT_URN: URN }, [
     { id: 'i1', from: 'msg://agent/agent-mux/agt_x', envelope_kind: 'request', intent: 'routine', subject: 'nightly digest', body: 'send me the digest' },

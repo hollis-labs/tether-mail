@@ -58,10 +58,12 @@ deterministic allowlist calls clearly routine (`routineReason` in `claude/hooks/
   go-ahead/go-no-go/greenlight/proceed/accept the risk, OK to/can I/may I/should we/your call/needs one
   call, confirm (except "confirm receipt"), merge/deploy/ship/release/restart/rotate/delete/drop/migrate/
   revert, ownership, option/choice/choose/pick/prefer/agree/recommend/yes-no, option lists (`(a) (b)`,
-  `1) 2)`, `A)` lines), and an "or" question.
+  `1) 2)`, `A)` lines), any "X or Y" (A or B, this or that) with or without "?", assign/close/take
+  over/"tell @", and answer/respond/reply.
 - **Sidecar only if, besides none of the above:** (a) a typed envelope whose sender sets `intent:
   routine`; or (b) a short untyped `request` (200 characters of text or less) with a routine verb:
-  list, show, what is / what's, which file|version|path|host, ping, status of, confirm receipt, ack.
+  list, show, what is / what's, which file|version|path|host, ping, status of, confirm receipt (a
+  bare "ack" is not one).
 - **Anything else:** main. The reason is logged in `/mail` (`<id>: kind escalation`, `<id>: asks for a
   decision ("permission")`, `<id>: not clearly routine`).
 

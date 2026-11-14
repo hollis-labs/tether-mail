@@ -186,7 +186,10 @@ export const DECISION_PATTERNS: readonly [RegExp, string][] = [
   [/\bowner(?:ship)?\b|\bwho\s+owns\b/i, 'ownership'],
   [/\boptions?\b|\bchoices?\b|\bchoos(?:e|ing)\b|\bpick\b|\bprefer\w*\b|\bagree\b|\brecommend\w*\b|\b(?:yes|y)\s*\/\s*(?:no|n)\b/i, 'choice'],
   [/\(\s*[a-z1-9]\s*\)[\s\S]*\(\s*[a-z1-9]\s*\)|(?:^|\s)[a-z1-9]\)[\s\S]*\s[a-z1-9]\)|^\s*(?:\(?[a-z1-9]\)|[a-z1-9][.:])\s/im, 'option list'],
-  [/\bor\b[^.?!\n]*\?/i, 'either/or question'],
+  // Any "X or Y" (A or B, a or b, this or that, keep or drop), with or without a "?".
+  [/\b\w+\s+or\s+\w+\b|\bor\b[^.?!\n]*\?/i, 'either/or'],
+  [/\bassign\w*\b|\bclos(?:e|es|ed|ing)\b|\btake\s+over\b|\btell\s+@/i, 'assignment'],
+  [/\b(?:answer|respond|reply)\w*\b/i, 'answer'],
 ]
 
 export const decisionTerm = (text: string): string | undefined => {
@@ -195,7 +198,7 @@ export const decisionTerm = (text: string): string | undefined => {
 }
 
 // The allowlist for a short untyped request.
-export const ROUTINE_VERBS = /\b(?:list|show)\b|\bwhat(?:'s|’s|\s+is)\b|\bwhich\s+(?:file|version|path|host)s?\b|\bping\b|\bstatus\s+of\b|\bconfirm\s+receipt\b|\back\b/i
+export const ROUTINE_VERBS = /\b(?:list|show)\b|\bwhat(?:'s|’s|\s+is)\b|\bwhich\s+(?:file|version|path|host)s?\b|\bping\b|\bstatus\s+of\b|\bconfirm\s+receipt\b/i
 export const ROUTINE_MAX_CHARS = 200
 
 // Never the sidecar's, whatever else the mail says.
