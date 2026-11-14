@@ -21,8 +21,13 @@ type Run = { exitCode: number; stdout: string; stderr: string; isStdoutTruncated
 const ran = (exitCode: number, stdout = '', stderr = ''): Run =>
   ({ exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
 // What `claude -p --output-format json --json-schema` prints.
-const sidecarSays = (r: object) => ran(0, JSON.stringify({ type: 'result', is_error: false, result: '', structured_output: r }))
-const HANDLED = { handled: true, summary: 'replied to @archie (skills list)', replied_to: '@archie', needs_human: false, needs_main_session: false }
+const sidecarSays = (results: object[]) =>
+  ran(0, JSON.stringify({ type: 'result', is_error: false, result: '', structured_output: { results } }))
+const out = (id: string, over: object = {}) =>
+  ({ id, handled: true, summary: 'replied to @archie (skills list)', replied_to: '@archie', needs_human: false, needs_main_session: false, ...over })
+// The ids the sidecar was asked about, read back from its prompt.
+const askedIds = (argv: readonly string[]) =>
+  (/mail ids with the mailbox skill: (.*)/.exec(argv[argv.length - 1] ?? '')?.[1] ?? '').split(', ')
 
 // Stands for the engine beneath the mod in a plain local session: a fake watcher that
 // prints `lines` once, a fake CLI that records its argv, a stubbed `claude -p` sidecar,
@@ -32,7 +37,8 @@ const world = (
   on: On,
   env: Record<string, string>,
   lines: object[] = [],
-  sidecar: () => Run | { deny: string } = () => sidecarSays(HANDLED),
+  sidecar: (ids: string[]) => Run | { deny: string } = ids => sidecarSays(ids.map(id => out(id))),
+  launch: string = LAUNCH,
 ) => {
   mock.env(on, { AGENT_SESSION_DIR: SDIR, ...env })
   const clock = mock.clock(on)
@@ -52,7 +58,7 @@ const world = (
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('fs.read', (_, e) => {
-    if (e.path === `${SDIR}/launch.sh`) return { value: LAUNCH }
+    if (e.path === `${SDIR}/launch.sh`) return { value: launch }
     throw new Error(`ENOENT ${e.path}`)
   })
   on('fs.exists', () => ({ value: false }))
@@ -66,7 +72,7 @@ const world = (
   on('process.run', (_, e) => {
     if (e.argv[0] === 'claude') {
       w.sidecars.push({ argv: [...e.argv], cwd: e.init?.cwd, env: e.init?.env, timeoutMs: e.init?.timeoutMs })
-      const r = sidecar()
+      const r = sidecar(askedIds(e.argv))
       return 'deny' in r ? r : { value: r }
     }
     w.ran.push([...e.argv])
@@ -75,6 +81,11 @@ const world = (
   on('prompt.submit', (_, e) => {
     w.prompts.push({ text: e.text, context: e.context, origin: e.origin?.kind ?? 'none' })
     return { text: e.text, context: e.context }
+  })
+  // An empty band and pane beneath the mod, so the tests do not lean on the host's own.
+  on('ui.render', ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   return w
@@ -137,7 +148,7 @@ test('action mail goes to one sidecar, launched like the seat minus this plugin;
   expect(w.ran).toEqual([['tether-remote', 'messages', 'read', 'r1', '--as', URN]])
 
   const band = await bandText($)
-  expect(band).toContain('📬 handled 2 mail: replied to @archie (skills list)')
+  expect(band).toContain('📬 handled 2 mail: replied to @archie (skills list); replied to @archie (skills list)')
   expect(band.some(t => t.includes('1 mail FYI'))).toBe(true)
 
   // The handled line has been seen once the user prompts again; the FYI rides along.
@@ -163,7 +174,7 @@ test('a failed sidecar falls back to one compact pointer turn; why is in the pan
   expect(w.sidecars.length).toBe(1)
   const t = turns(w)
   expect(t.length).toBe(1)
-  expect(t[0]?.text).toBe('📬 subject a1 · from @archie · /mail')
+  expect(t[0]?.text).toBe('📬 subject a1 · from @archie · a1 · /mail')
   expect(t[0]?.context).toBeUndefined()
   expect(await paneHas($, /pointer sent to this session \(a1\): sidecar failed: exit 1: boom/)).toBe(true)
 })
@@ -178,18 +189,18 @@ test('a timed-out sidecar falls back the same way', async ($, on) => {
 
 test('needs_main_session makes a compact pointer turn', async ($, on) => {
   const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], () =>
-    sidecarSays({ handled: false, summary: 'big refactor asked', needs_human: false, needs_main_session: true }))
+    sidecarSays([out('a1', { handled: false, summary: 'big refactor asked', needs_main_session: true })]))
   await boot($)
   await settle(w)
   const t = turns(w)
   expect(t.length).toBe(1)
-  expect(t[0]?.text).toBe('📬 subject a1 · from @tether · /mail')
+  expect(t[0]?.text).toBe('📬 subject a1 · from @tether · a1 · /mail')
   expect(await paneHas($, /needs this session: big refactor asked/)).toBe(true)
 })
 
 test("needs_human from the sidecar is treated as human: band and toast, no turn", async ($, on) => {
   const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], () =>
-    sidecarSays({ handled: false, summary: 'wants a prod approval', needs_human: true, needs_main_session: false }))
+    sidecarSays([out('a1', { handled: false, summary: 'wants a prod approval', needs_human: true })]))
   await boot($)
   await settle(w)
   expect(turns(w).length).toBe(0)
@@ -213,7 +224,9 @@ test('human mail: band and toast, no turn, no sidecar; read only when opened in 
   expect(w.prompts[0]?.context).toBeUndefined()
   expect(w.ran).toEqual([])
 
+  expect(await paneHas($, /FOR YOU @pm: subject h1 \(h1\)/)).toBe(true)
   const r = await $.command.run({ command: 'mail', args: '' } as never)
+  expect(await paneHas($, /read +@pm: subject h1 \(h1\)/)).toBe(true)
   expect((r as { text?: string }).text).toContain('1 message for you marked read')
   expect(w.ran).toEqual([['tether-remote', 'messages', 'read', 'h1', '--as', URN]])
   expect(await bandText($)).toEqual([])
@@ -226,7 +239,7 @@ test('TETHER_MAIL_SIDECAR=0 keeps the compact pointer turn and starts no sidecar
   expect(w.sidecars.length).toBe(0)
   const t = turns(w)
   expect(t.length).toBe(1)
-  expect(t[0]?.text).toBe('📬 subject a1 · from @tether · /mail')
+  expect(t[0]?.text).toBe('📬 subject a1 · from @tether · a1 · /mail')
   expect(t[0]?.text).not.toContain('h1')
   expect(w.toasts.length).toBe(1)
 })
@@ -308,4 +321,82 @@ test('inside a sidecar the mod stands down: no watcher, no recursion', async ($,
   expect(w.spawned).toBe(0)
   expect(w.sidecars.length).toBe(0)
   expect(w.prompts.length).toBe(0)
+})
+
+test('a mixed batch routes each mail by its own result', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    mail('a1', 'agent'), mail('a2', 'agent'), mail('a3', 'agent'), mail('a4', 'agent'), mail('a5', 'agent'),
+  ], () => sidecarSays([
+    out('a1'),
+    out('a2', { handled: false, summary: 'prod approval', needs_human: true }),
+    out('a3', { handled: false, summary: 'big refactor', needs_main_session: true }),
+    out('a4', { handled: false, summary: 'half done', error: 'tool refused' }),
+    // a5 is missing from the result
+  ]))
+  await boot($)
+  await settle(w)
+
+  expect(w.sidecars.length).toBe(1)
+  // a1 handled: band line only.
+  expect(await bandText($)).toContain('📬 handled 1 mail: replied to @archie (skills list)')
+  // a2 alone goes to the human; a3, a4 and a5 alone make one pointer turn.
+  expect(await bandText($)).toContain('📬 [@tether → you] subject a2 · /mail')
+  expect(w.toasts).toEqual(['Mail needs you: @tether: subject a2 · /mail'])
+  const t = turns(w)
+  expect(t.length).toBe(1)
+  expect(t[0]?.text.split('\n')).toEqual([
+    '📬 subject a3 · from @tether · a3 · /mail',
+    '📬 subject a4 · from @tether · a4 · /mail',
+    '📬 subject a5 · from @tether · a5 · /mail',
+  ])
+  expect(await paneHas($, /a5: missing from the sidecar result/)).toBe(true)
+  // The mod marks none of them read; /mail marks only the human one.
+  expect(w.ran).toEqual([])
+  await $.command.run({ command: 'mail', args: '' } as never)
+  expect(w.ran).toEqual([['tether-remote', 'messages', 'read', 'a2', '--as', URN]])
+})
+
+test('needs_human on one mail does not pull the others to the human', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent'), mail('a2', 'agent')], () => sidecarSays([
+    out('a1', { handled: false, summary: 'approve?', needs_human: true }),
+    out('a2', { handled: false, summary: 'needs context', needs_main_session: true }),
+  ]))
+  await boot($)
+  await settle(w)
+  expect(await bandText($)).toEqual(['📬 [@tether → you] subject a1 · /mail'])
+  expect(turns(w).map(t => t.text)).toEqual(['📬 subject a2 · from @tether · a2 · /mail'])
+})
+
+test('an empty result leaves every mail to the main session', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent'), mail('a2', 'agent')], () => sidecarSays([]))
+  await boot($)
+  await settle(w)
+  expect(turns(w)[0]?.text.split('\n').length).toBe(2)
+  expect(w.toasts).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+// The launch.sh form mux seats use: boot prompt as the first positional, no `--`,
+// no --setting-sources, two variables on one export line.
+const MUX_LAUNCH = [
+  '#!/bin/bash',
+  'export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"',
+  `cd ${SDIR}`,
+  `export TETHER_AGENT_URN=${URN} TETHER_MAIL_CLI=tether-remote`,
+  `export PATH="${SDIR}:$PATH"`,
+  'exec claude Read\\ CLAUDE.md\\ \\(or\\ AGENTS.md\\)\\ in\\ this\\ directory\\,\\ and\\ do\\ the\\ Start-up\\ section.\\ Then\\ wait\\ for\\ assignment. --dangerously-skip-permissions --model opus --add-dir /home/x/dev',
+].join('\n')
+
+test('a mux-format launch.sh: the boot prompt never reaches the sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [mail('a1', 'agent')], undefined, MUX_LAUNCH)
+  await boot($)
+  await settle(w)
+  const argv = w.sidecars[0]?.argv ?? []
+  expect(argv.slice(0, 6)).toEqual(['claude', '--setting-sources', 'project,local', '--dangerously-skip-permissions', '--add-dir', '/home/x/dev'])
+  expect(argv.some(a => a.includes('Start-up'))).toBe(false)
+  expect(argv).not.toContain('opus')
+  // The only positional is the mail prompt, after `--`.
+  expect(argv.indexOf('--')).toBe(argv.length - 2)
+  expect(argv[argv.length - 1]).toContain('Handle these Tether mail ids with the mailbox skill: a1')
+  expect(w.sidecars[0]?.env).toEqual(expect.objectContaining({ TETHER_AGENT_URN: URN, TETHER_MAIL_CLI: 'tether-remote' }))
 })
