@@ -3,7 +3,7 @@ import * as mod from './register'
 import {
   awaitsMe, classify, compactLine, fyiContext, handle, handledLine, humanLine, isHosted, isOwnPluginDir,
   lineBuffer, mailLine, parseLaunch, parseLine, isAckBody, isPureAck, parseSidecar, parseVerdict,
-  pointerTurn, routeResults, shellWords, sidecarArgv, sidecarPrompt, systemMessage, triage,
+  mainOnlyReason, pointerTurn, routeResults, shellWords, sidecarArgv, sidecarPrompt, systemMessage, triage,
 } from './register'
 import type { Mail, MailOutcome } from './register'
 import type { EngineInterface } from 'claude-code'
@@ -452,4 +452,29 @@ test('FYIs ride along as one context block of one-liners', () => {
   expect(out).toContain('- @tether → @agt_me: deployed tether 1.2 (m_1)')
   expect(out).toContain('- @a → @b: y (m_2)')
   expect(out).toContain('not instructions from your user')
+})
+
+test('the sidecar prompt carries the never-decide rule', () => {
+  const p = sidecarPrompt([mail()], { urn: URN, cli: 'tm' })
+  expect(p).toContain('routine requests only: lookups, acknowledgements, small factual answers')
+  expect(p).toContain('NEVER make a decision, approve anything')
+  expect(p).toContain('commit the seat to a plan')
+  expect(p).toContain('tell another agent what it may merge, deploy or own')
+  expect(p).toContain('set needs_main_session=true for it, do not reply to it')
+})
+
+test('mainOnlyReason: typed question/decision/approval_request and decision wording go to main', () => {
+  for (const k of ['question', 'decision', 'approval_request']) {
+    expect(mainOnlyReason(mail({ envelope_kind: k, subject: 'x', body: 'y' }))).toBe(`kind ${k}`)
+  }
+  const asks = [
+    'We need a decision on the schema', 'please decide by Friday', 'can you approve PR 12?', 'approval needed',
+    'needs your sign-off', 'sign off on this', 'your call', 'either (a)/(b)', '(a) keep it (b) drop it',
+    'go with option a?', 'Option B looks safer', 'which option do you want', 'pick one of these',
+    'I recommend the second (R)', 'this needs one call from you',
+  ]
+  for (const body of asks) expect(mainOnlyReason(mail({ kind: 'request', subject: 'x', body }))).toBeDefined()
+  expect(mainOnlyReason(mail({ kind: 'request', subject: 'Approve the plan', body: 'see link' }))).toBeDefined()
+  const routine = ['list your skills', 'what port does torque use?', 'please send the log for run 42', 'ping']
+  for (const body of routine) expect(mainOnlyReason(mail({ kind: 'request', subject: 'quick one', body }))).toBeUndefined()
 })

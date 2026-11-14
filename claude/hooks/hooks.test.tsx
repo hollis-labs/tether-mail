@@ -291,7 +291,7 @@ test('a model `read` is never marked read unseen; a pure ack is', async ($, on) 
   expect(w.prompts[0]?.context?.[0]).not.toContain('(k1)')
 })
 
-test('an untyped request reaches the sidecar; a model that would call it fyi is never asked', async ($, on) => {
+test('an untyped request asking which option is never the sidecar\'s; a model that would call it fyi is never asked', async ($, on) => {
   let asked = 0
   on('model.complete', () => {
     asked += 1
@@ -304,8 +304,8 @@ test('an untyped request reaches the sidecar; a model that would call it fyi is 
   await settle(w)
 
   expect(asked).toBe(0)
-  expect(w.sidecars.length).toBe(1)
-  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['d1'])
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).map(t => t.text)).toEqual(['📬 0017 design: three calls need you · from @agt_lpy0gym4eh · d1 · /mail'])
   expect(w.ran).toEqual([])
   await userPrompt($, 'hello')
   expect(w.prompts.find(p => p.origin === 'composer')?.context).toBeUndefined()
@@ -419,4 +419,61 @@ test('a mux-format launch.sh: the boot prompt never reaches the sidecar', async 
   expect(argv.indexOf('--')).toBe(argv.length - 2)
   expect(argv[argv.length - 1]).toContain('Handle these Tether mail ids with the mailbox skill: a1')
   expect(w.sidecars[0]?.env).toEqual(expect.objectContaining({ TETHER_AGENT_URN: URN, TETHER_MAIL_CLI: 'tether-remote' }))
+})
+
+// CW-20261114-0018 incident: a sidecar answered a design decision in a lead seat's name.
+test('a typed decision goes straight to the main session as a pointer turn; no sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    mail('d1', 'agent', { kind: 'request', envelope_kind: 'decision', subject: 'pick the storage layout' }),
+    mail('q1', 'agent', { envelope_kind: 'question', subject: 'where does X live?' }),
+    mail('p1', 'agent', { envelope_kind: 'approval_request', subject: 'ship it?' }),
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  const t = turns(w)
+  expect(t.length).toBe(1)
+  expect(t[0]?.text.split('\n')).toEqual([
+    '📬 pick the storage layout · from @tether · d1 · /mail',
+    '📬 where does X live? · from @tether · q1 · /mail',
+    '📬 ship it? · from @tether · p1 · /mail',
+  ])
+  expect(await paneHas($, /d1: kind decision; never the sidecar/)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
+test('an untyped request asking for one call between (a)/(b) goes to the main session; no sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [{
+    id: 'u1', from: 'msg://agent/agent-mux/agt_lpy0gym4eh', kind: 'request', subject: 'design question on 0018',
+    body: 'Two ways to do this: (a)/(b). I lean (a). This needs one call from you, then merge and deploy as usual.',
+  }])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).map(t => t.text)).toEqual(['📬 design question on 0018 · from @agt_lpy0gym4eh · u1 · /mail'])
+  expect(await paneHas($, /u1: asks for a decision/)).toBe(true)
+})
+
+test('a routine untyped request still goes to the sidecar, beside a decision that does not', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 's1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'list your skills', body: 'Can you list your skills?' },
+    { id: 'u1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'option a or option b?', body: 'your call' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(1)
+  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['s1'])
+  expect(turns(w).map(t => t.text)).toEqual(['📬 option a or option b? · from @agt_x · u1 · /mail'])
+  expect(await bandText($)).toContain('📬 handled 1 mail: replied to @archie (skills list)')
+})
+
+test('with the sidecar off, decisions and routine requests share one pointer turn', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [
+    mail('a1', '', { kind: 'request' }), mail('d1', '', { envelope_kind: 'decision' }),
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).length).toBe(1)
+  expect(turns(w)[0]?.text.split('\n').length).toBe(2)
 })
