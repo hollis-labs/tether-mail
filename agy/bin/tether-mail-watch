@@ -86,11 +86,13 @@ def still_unread(cli, urn, mail_id):
 def to_mail(m):
     """Normalise one message object (list or watch output) to our line shape."""
     p = m.get("payload") or {}
+    if not isinstance(p, dict):
+        p = {"text": p} if isinstance(p, str) else {}
     out = {
         "id": m.get("id", ""),
         "from": m.get("from") or "unknown",
         "subject": m.get("subject") or p.get("subject") or m.get("kind") or "",
-        "body": m.get("body") or p.get("body") or "",
+        "body": body_text(m, p),
     }
     # Optional routing fields, passed through only when the message carries them: the
     # Claude mod triages on `kind`, `attention`, `awaiting` and `urgency` (Tether stamps it
@@ -108,7 +110,26 @@ def to_mail(m):
     ek = p.get("kind") if isinstance(p, dict) else None
     if m.get("content_type") == ENVELOPE_CONTENT_TYPE and isinstance(ek, str) and ek:
         out["envelope_kind"] = ek
+        # The sender's own intent (`routine` lets the Claude mod's sidecar take it).
+        it = p.get("intent")
+        if isinstance(it, str) and it:
+            out["intent"] = it
     return out
+
+
+# Every text field a message may carry: untyped tether_message_send mail puts its text in
+# payload.text (sometimes payload.body); typed envelopes use body. All distinct ones, in order.
+TEXT_FIELDS = ("body", "text", "message", "content")
+
+
+def body_text(m, p):
+    parts = []
+    for src, keys in ((m, TEXT_FIELDS[:2]), (p, TEXT_FIELDS)):
+        for k in keys:
+            v = src.get(k)
+            if isinstance(v, str) and v.strip() and v not in parts:
+                parts.append(v)
+    return "\n\n".join(parts)
 
 
 def stream(cli, urn, after_seq, state):

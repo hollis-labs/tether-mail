@@ -79,6 +79,22 @@ class ToMailTest(unittest.TestCase):
             loader.exec_module(mod)
             self.assertEqual(mod.to_mail(msg), want, host)
 
+    def test_payload_text_is_read(self):
+        # Untyped tether_message_send mail: the text is in payload.text, no body.
+        m = self.to_mail({"id": "m1", "kind": "request", "payload": {"text": "OK to merge #549?"}})
+        self.assertEqual(m["body"], "OK to merge #549?")
+        self.assertEqual(m["subject"], "request")
+        # Both body and text: both are kept, once each; message/content as well.
+        m = self.to_mail({"id": "m1", "payload": {"body": "b", "text": "t", "message": "b", "content": "c"}})
+        self.assertEqual(m["body"], "b\n\nt\n\nc")
+        self.assertEqual(self.to_mail({"id": "m1", "payload": "plain"})["body"], "plain")
+        self.assertEqual(self.to_mail({"id": "m1", "text": "top", "payload": {"text": "top"}})["body"], "top")
+
+    def test_envelope_intent_passes_through_only_for_a_typed_envelope(self):
+        m = self.to_mail({"id": "m1", "content_type": ENVELOPE, "payload": {"kind": "request", "intent": "routine"}})
+        self.assertEqual(m["intent"], "routine")
+        self.assertNotIn("intent", self.to_mail({"id": "m2", "kind": "request", "payload": {"intent": "routine"}}))
+
     def test_non_string_values_are_dropped(self):
         m = self.to_mail({"id": "m1", "attention": {"x": 1}, "payload": {}})
         self.assertNotIn("attention", m)

@@ -13,8 +13,10 @@ const LAUNCH = [
   `exec claude --setting-sources project,local --settings ${SDIR}/claude-settings.json --strict-mcp-config --mcp-config ${SDIR}/claude-mcp.json --plugin-dir /a/plugins/tether-mail/claude --dangerously-skip-permissions -n Archie -- 'boot prompt' "$@"`,
 ].join('\n')
 
+// A short routine body (a routine verb, under 200 characters), so an untyped request
+// made with it is one the sidecar may take.
 const mail = (id: string, attention: string, extra: object = {}) => ({
-  id, from: 'msg://agent/agent-mux/tether', subject: `subject ${id}`, body: `BODY-${id} `.repeat(20), attention, ...extra,
+  id, from: 'msg://agent/agent-mux/tether', subject: `subject ${id}`, body: 'list your skills. ' + `BODY-${id} `.repeat(20), attention, ...extra,
 })
 
 type Run = { exitCode: number; stdout: string; stderr: string; isStdoutTruncated: boolean; isStderrTruncated: boolean }
@@ -291,7 +293,7 @@ test('a model `read` is never marked read unseen; a pure ack is', async ($, on) 
   expect(w.prompts[0]?.context?.[0]).not.toContain('(k1)')
 })
 
-test('an untyped request reaches the sidecar; a model that would call it fyi is never asked', async ($, on) => {
+test('an untyped request asking which option is never the sidecar\'s; a model that would call it fyi is never asked', async ($, on) => {
   let asked = 0
   on('model.complete', () => {
     asked += 1
@@ -304,8 +306,8 @@ test('an untyped request reaches the sidecar; a model that would call it fyi is 
   await settle(w)
 
   expect(asked).toBe(0)
-  expect(w.sidecars.length).toBe(1)
-  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['d1'])
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).map(t => t.text)).toEqual(['📬 0017 design: three calls need you · from @agt_lpy0gym4eh · d1 · /mail'])
   expect(w.ran).toEqual([])
   await userPrompt($, 'hello')
   expect(w.prompts.find(p => p.origin === 'composer')?.context).toBeUndefined()
@@ -419,4 +421,123 @@ test('a mux-format launch.sh: the boot prompt never reaches the sidecar', async 
   expect(argv.indexOf('--')).toBe(argv.length - 2)
   expect(argv[argv.length - 1]).toContain('Handle these Tether mail ids with the mailbox skill: a1')
   expect(w.sidecars[0]?.env).toEqual(expect.objectContaining({ TETHER_AGENT_URN: URN, TETHER_MAIL_CLI: 'tether-remote' }))
+})
+
+// CW-20261114-0018 incident: a sidecar answered a design decision in a lead seat's name.
+test('a typed decision goes straight to the main session as a pointer turn; no sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    mail('d1', 'agent', { kind: 'request', envelope_kind: 'decision', subject: 'pick the storage layout' }),
+    mail('q1', 'agent', { envelope_kind: 'question', subject: 'where does X live?' }),
+    mail('p1', 'agent', { envelope_kind: 'approval_request', subject: 'ship it?' }),
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  const t = turns(w)
+  expect(t.length).toBe(1)
+  expect(t[0]?.text.split('\n')).toEqual([
+    '📬 pick the storage layout · from @tether · d1 · /mail',
+    '📬 where does X live? · from @tether · q1 · /mail',
+    '📬 ship it? · from @tether · p1 · /mail',
+  ])
+  expect(await paneHas($, /d1: kind decision/)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
+test('an untyped request asking for one call between (a)/(b) goes to the main session; no sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [{
+    id: 'u1', from: 'msg://agent/agent-mux/agt_lpy0gym4eh', kind: 'request', subject: 'design question on 0018',
+    body: 'Two ways to do this: (a)/(b). I lean (a). This needs one call from you, then merge and deploy as usual.',
+  }])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).map(t => t.text)).toEqual(['📬 design question on 0018 · from @agt_lpy0gym4eh · u1 · /mail'])
+  expect(await paneHas($, /u1: asks for a decision/)).toBe(true)
+})
+
+test('a routine untyped request still goes to the sidecar, beside a decision that does not', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 's1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'list your skills', body: 'Can you list your skills?' },
+    { id: 'u1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'option a or option b?', body: 'your call' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(1)
+  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['s1'])
+  expect(turns(w).map(t => t.text)).toEqual(['📬 option a or option b? · from @agt_x · u1 · /mail'])
+  expect(await bandText($)).toContain('📬 handled 1 mail: replied to @archie (skills list)')
+})
+
+test('with the sidecar off, decisions and routine requests share one pointer turn', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN, TETHER_MAIL_SIDECAR: '0' }, [
+    mail('a1', '', { kind: 'request' }), mail('d1', '', { envelope_kind: 'decision' }),
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).length).toBe(1)
+  expect(turns(w)[0]?.text.split('\n').length).toBe(2)
+})
+
+test('escalation, handoff and mail awaiting this seat go to the main session; no sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    mail('e1', '', { kind: 'escalation' }),
+    mail('h1', '', { envelope_kind: 'handoff' }),
+    mail('w1', '', { kind: 'notice', awaiting: '@agt_me' }),
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w)[0]?.text.split('\n')).toEqual([
+    '📬 subject e1 · from @tether · e1 · /mail',
+    '📬 subject h1 · from @tether · h1 · /mail',
+    '📬 subject w1 · from @tether · w1 · /mail',
+  ])
+  expect(await paneHas($, /e1: kind escalation; h1: kind handoff; w1: awaiting @agt_me/)).toBe(true)
+})
+
+test('main by default: a request that is not clearly routine never reaches the sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 'n1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: 'send the log for run 42' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w).length).toBe(1)
+  expect(await paneHas($, /n1: not clearly routine/)).toBe(true)
+})
+
+test('the two second-round review probes reach the main session, not the sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 'p1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: '', text: 'What is your answer on 0038, A or B' },
+    { id: 'p2', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: '', text: 'ack and assign 0040 to builder-2' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(0)
+  expect(turns(w)[0]?.text.split('\n')).toEqual(['📬 request · from @agt_x · p1 · /mail', '📬 request · from @agt_x · p2 · /mail'])
+})
+
+test('a typed envelope with intent routine goes to the sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 'i1', from: 'msg://agent/agent-mux/agt_x', envelope_kind: 'request', intent: 'routine', subject: 'nightly digest', body: 'send me the digest' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(1)
+  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['i1'])
+  expect(turns(w).length).toBe(0)
+})
+
+test('the decision text in payload.text (as the watcher passes it) keeps a request from the sidecar', async ($, on) => {
+  const w = world(on, { TETHER_AGENT_URN: URN }, [
+    { id: 't1', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: '', text: 'list the hosts, then: OK to merge #549?' },
+    { id: 't2', from: 'msg://agent/agent-mux/agt_x', kind: 'request', subject: 'request', body: '', text: 'list your skills' },
+  ])
+  await boot($)
+  await settle(w)
+  expect(w.sidecars.length).toBe(1)
+  expect(askedIds(w.sidecars[0]!.argv)).toEqual(['t2'])
+  expect(turns(w).map(t => t.text)).toEqual(['📬 request · from @agt_x · t1 · /mail'])
 })
