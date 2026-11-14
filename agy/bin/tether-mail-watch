@@ -15,12 +15,11 @@ with a note on stderr. TETHER_MAIL_ALLOW_HOSTED=1 overrides, for deliberate use 
 
 Output (stdout, line-buffered):
   --format json      {"id","from","subject","body"}   one per line (default)
-  --format envelope  the boxed 'You've got mail' text, blank-line separated
+  --format envelope  one compact pointer line per message (no body), blank-line separated
 Diagnostics go to stderr only. Exits 0 on SIGTERM/SIGINT or after --once.
 """
-import argparse, json, os, signal, subprocess, sys, textwrap, time
+import argparse, json, os, signal, subprocess, sys, time
 
-W = 46
 
 
 def fetch(cli, urn):
@@ -128,31 +127,23 @@ def clip(s, n):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def wrap_body(body, lines=4):
-    """Up to `lines` rows of the body, word-wrapped to the box; '…' marks a cut."""
-    text = " ".join(str(body).split())
-    if not text:
-        return ["(empty)"]
-    rows = textwrap.wrap(text, W - 4, break_long_words=True) or [""]
-    if len(rows) > lines:
-        rows = rows[:lines]
-        rows[-1] = clip(rows[-1] + " …", W - 4) if len(rows[-1]) < W - 5 else rows[-1][: W - 5] + "…"
-    return rows
+def handle(urn, explicit=None):
+    """`@handle` for display: an explicit handle, else the URN's last segment."""
+    h = str(explicit or "").strip()
+    if h:
+        return h if h.startswith("@") else "@" + h
+    u = str(urn or "").strip().rstrip("/")
+    if not u:
+        return "@?"
+    return u if u.startswith("@") else "@" + (u.split("/")[-1] or u)
 
 
 def envelope(m, urn, cli):
-    row = lambda s, pad=0: "│ " + clip(s, W - 4).ljust(W - 4 - pad) + " │"
-    box = [
-        "┌" + "─" * (W - 2) + "┐",
-        row("📬 YOU'VE GOT MAIL", 1),  # emoji is 2 cells wide
-        "├" + "─" * (W - 2) + "┤",
-        row("From: " + m["from"]), row("Subj: " + (m["subject"] or "(none)")), row(""),
-    ] + [row(l) for l in wrap_body(m["body"])] + ["└" + "─" * (W - 2) + "┘"]
-    return "\n".join(box + [
-        "Read it: %s messages get %s --as %s" % (cli, m["id"], urn),
-        "Then mark it: %s messages read %s --as %s" % (cli, m["id"], urn),
-    ])
-
+    """One compact pointer line per message (the boxed envelope is gone, CW-20261114-0018):
+    subject, sender, id and the read/mark commands. Never the body."""
+    return "📬 %s · from %s · %s · read: `%s messages get %s --as %s`, then `%s messages read %s --as %s`" % (
+        clip(m.get("subject") or "(no subject)", 100), handle(m.get("from"), m.get("from_handle")),
+        m["id"], cli, m["id"], urn, cli, m["id"], urn)
 
 def system_message(text):
     """Frame delivered mail so its origin is unmistakable on every host."""
