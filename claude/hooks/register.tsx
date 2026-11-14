@@ -17,6 +17,8 @@ export type Mail = {
   awaiting?: string
   urgency?: string
   envelope_kind?: string
+  intent?: string
+  text?: string
   from_handle?: string
   to_handle?: string
 }
@@ -162,35 +164,71 @@ export const classify = (m: Mail, self: readonly string[] = []): Rule | undefine
   return undefined
 }
 
-// Mail the sidecar must never see (CW-20261114-0018 incident: a sidecar answered a design
-// decision in a lead seat's name). Decided by rule, never by a model, ahead of the sidecar:
-// a typed question, decision or approval_request, or any mail whose subject or body asks
-// for a decision, an approval, a sign-off or a choice between options. Deliberately broad:
-// a false match costs one compact line in the main session; a miss lets a background
-// session speak for the seat.
-const MAIN_ONLY_KINDS = new Set(['question', 'decision', 'approval_request'])
+// Who handles action mail (CW-20261114-0018 incident: a sidecar answered an (a)/(b) design
+// decision in a lead seat's name). The default is the main session, as a compact pointer
+// turn. The sidecar gets only mail that a narrow, deterministic allowlist calls clearly
+// routine, and never mail that matches the decision deny list. A false "main" costs one
+// line in the main session; a false "sidecar" lets a background session speak for the seat.
+
+// Every content field the watcher may pass (untyped tether_message_send mail carries its
+// text in payload.text, sometimes payload.body; the watcher folds both into `body`).
+export const mailText = (m: Pick<Mail, 'subject' | 'body' | 'text'>) =>
+  [m.subject, m.body, m.text].filter(s => typeof s === 'string' && s.trim()).join('\n')
+
+// The deny list: any match keeps a mail from the sidecar, whatever else it says.
 export const DECISION_PATTERNS: readonly [RegExp, string][] = [
-  [/\bdecisions?\b/i, 'decision'],
-  [/\bdecid(?:e|ed|es|ing)\b/i, 'decide'],
-  [/\bapprov(?:e|ed|es|ing|als?)\b/i, 'approve/approval'],
-  [/\bsign[\s-]?offs?\b/i, 'sign-off'],
-  [/\byour call\b/i, 'your call'],
-  [/\(a\)[\s\S]{0,400}?\(b\)|\ba\)\s*\/\s*b\)|\ba\s*\/\s*b\b(?=[\s\S]{0,40}\b(?:option|choice|pick|choose)\b)/i, '(a)/(b)'],
-  [/\boptions?\s+[ab12]\b|\bwhich option\b/i, 'option a/b'],
-  [/\b(?:pick|choose)\s+(?:one|either|between)\b|\bchoice between\b/i, 'choice between options'],
-  [/\brecommend\w*\b[\s\S]{0,400}?\(R\)/i, 'recommend (R)'],
-  [/\bneeds?\s+(?:one|a|your)\s+call\b/i, 'needs one call'],
+  [/\bdecisions?\b|\bdecid(?:e|ed|es|ing)\b|\bruling\b/i, 'decision'],
+  [/\bapprov(?:e|ed|es|ing|als?)\b|\bsign[\s-]?offs?\b|\blgtm\b|\bauthori[sz](?:e|ed|es|ing|ation)\b|\bpermission\b/i, 'approval'],
+  [/\bgreen[\s-]?light|\bgo[\s/-]*no[\s/-]*go\b|\bgo[\s-]ahead\b|\bproceed\b|\baccept\s+the\s+risk\b/i, 'go-ahead'],
+  [/\b(?:ok|okay)\s+to\b|\b(?:can|may|shall)\s+i\b|\bshould\s+(?:i|we)\b|\byour call\b|\bneeds?\s+(?:one|a|your)\s+call\b/i, 'permission'],
+  [/\bconfirm(?!\s+receipt\b)/i, 'confirm'],
+  [/\b(?:merg|deploy|ship|releas|restart|rotat|delet|drop|migrat|revert|rollback)\w*\b|\broll\s+back\b/i, 'elevated verb'],
+  [/\bowner(?:ship)?\b|\bwho\s+owns\b/i, 'ownership'],
+  [/\boptions?\b|\bchoices?\b|\bchoos(?:e|ing)\b|\bpick\b|\bprefer\w*\b|\bagree\b|\brecommend\w*\b|\b(?:yes|y)\s*\/\s*(?:no|n)\b/i, 'choice'],
+  [/\(\s*[a-z1-9]\s*\)[\s\S]*\(\s*[a-z1-9]\s*\)|(?:^|\s)[a-z1-9]\)[\s\S]*\s[a-z1-9]\)|^\s*(?:\(?[a-z1-9]\)|[a-z1-9][.:])\s/im, 'option list'],
+  [/\bor\b[^.?!\n]*\?/i, 'either/or question'],
 ]
 
-// Why a mail goes straight to the main session, or undefined when the sidecar may take it.
-export const mainOnlyReason = (m: Mail): string | undefined => {
-  const env = low(m.envelope_kind)
-  if (MAIN_ONLY_KINDS.has(env)) return `kind ${env}`
-  const kind = low(m.kind)
-  if (MAIN_ONLY_KINDS.has(kind)) return `kind ${kind}`
-  const text = `${m.subject ?? ''}\n${m.body ?? ''}`
-  for (const [re, label] of DECISION_PATTERNS) if (re.test(text)) return `asks for a decision ("${label}")`
+export const decisionTerm = (text: string): string | undefined => {
+  for (const [re, label] of DECISION_PATTERNS) if (re.test(text)) return label
   return undefined
+}
+
+// The allowlist for a short untyped request.
+export const ROUTINE_VERBS = /\b(?:list|show)\b|\bwhat(?:'s|’s|\s+is)\b|\bwhich\s+(?:file|version|path|host)s?\b|\bping\b|\bstatus\s+of\b|\bconfirm\s+receipt\b|\back\b/i
+export const ROUTINE_MAX_CHARS = 200
+
+// Never the sidecar's, whatever else the mail says.
+const MAIN_KINDS = new Set(['question', 'decision', 'approval_request', 'escalation', 'handoff'])
+
+// Why a mail may go to the sidecar, or undefined: it goes to the main session.
+export const routineReason = (m: Mail, self: readonly string[] = []): string | undefined => {
+  const env = low(m.envelope_kind)
+  const kind = low(m.kind)
+  if (MAIN_KINDS.has(env) || MAIN_KINDS.has(kind)) return undefined
+  if (awaitsMe(m, self) || urgencyOf(m) === 'high') return undefined
+  if (decisionTerm(mailText(m))) return undefined
+  // (a) a typed envelope its sender marks routine
+  if (env && low(m.intent) === 'routine') return 'intent routine'
+  // (b) a short untyped request with a routine verb
+  const content = [m.body, m.text].filter(Boolean).join('\n').trim() || (m.subject ?? '').trim()
+  if (!env && kind === 'request' && content.length <= ROUTINE_MAX_CHARS && ROUTINE_VERBS.test(mailText(m))) {
+    return 'short routine request'
+  }
+  return undefined
+}
+
+// Why a mail goes to the main session (for the pane): the first rule that kept it there.
+export const mainReason = (m: Mail, self: readonly string[] = []): string => {
+  const env = low(m.envelope_kind)
+  const kind = low(m.kind)
+  if (MAIN_KINDS.has(env)) return `kind ${env}`
+  if (MAIN_KINDS.has(kind)) return `kind ${kind}`
+  if (awaitsMe(m, self)) return `awaiting ${m.awaiting}`
+  if (urgencyOf(m) === 'high') return 'urgency high'
+  const term = decisionTerm(mailText(m))
+  if (term) return `asks for a decision ("${term}")`
+  return 'not clearly routine'
 }
 
 // The model may only choose between action and fyi. Its `read` becomes fyi (a wrong or
@@ -532,16 +570,17 @@ const clock = (at: number) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-// The mod only consumes ../bin/tether-mail-watch (one JSON line per new
-// message). How mail is fetched — poll today, push later — lives there.
-// Each message is triaged (classify, then the model only if no rule matches) before
-// anything reaches the chat (CW-20261114-0018):
-// read -> marked read, pane log only; fyi -> pane + band, rides on the user's next
-// prompt as context; action -> a typed question/decision/approval_request or any mail
-// asking for a decision goes straight to the main session as a pointer turn (never the
-// sidecar); the rest to a background `claude -p` sidecar for the seat, one band line; human -> toast + band, no turn, read when opened in /mail. Only a sidecar
-// failure, a `needs_main_session` result or TETHER_MAIL_SIDECAR=0 makes a turn, and that
-// turn is one compact line per mail.
+// The mod only consumes ../bin/tether-mail-watch (one JSON line per new message). How
+// mail is fetched (poll today, push later) lives there. Each message is triaged
+// (classify, then the model only if no rule matches) before anything reaches the chat
+// (CW-20261114-0018):
+// - read: marked read, pane log only.
+// - fyi: pane + band; rides on the user's next prompt as context.
+// - human: toast + band, no turn; read when opened in /mail.
+// - action: the main session by default, one compact pointer turn. Only mail that
+//   routineReason calls clearly routine goes to a background `claude -p` sidecar (one
+//   band line); a sidecar failure or `needs_main_session` result also makes a pointer
+//   turn. TETHER_MAIL_SIDECAR=0 sends all action mail to the main session.
 // The module's own running state (starts over on a reload; $.state keeps the queues).
 type Ctx = {
   active: boolean
@@ -736,11 +775,13 @@ const handleBatch = async ($: EngineInterface, ctx: Ctx, batch: Mail[]) => {
     }
   }
   if (humans.length) await toHuman($, ctx, humans)
-  // Decisions, approvals and choices never reach the sidecar: one pointer turn, by rule.
-  // (With the sidecar off, dispatchAction sends every action mail there in one turn.)
-  const direct = ctx.sidecar ? actions.flatMap(m => { const why = mainOnlyReason(m); return why ? [{ m, why }] : [] }) : []
+  // Action mail goes to the main session unless it is clearly routine (routineReason).
+  // With the sidecar off, dispatchAction sends all of it there in one turn.
+  const direct = ctx.sidecar
+    ? actions.flatMap(m => (routineReason(m, ctx.self) ? [] : [{ m, why: mainReason(m, ctx.self) }]))
+    : []
   if (direct.length) {
-    await pointerToMain($, ctx, direct.map(d => d.m), direct.map(d => `${d.m.id}: ${d.why}; never the sidecar`).join('; '))
+    await pointerToMain($, ctx, direct.map(d => d.m), direct.map(d => `${d.m.id}: ${d.why}`).join('; '))
   }
   const routine = actions.filter(m => !direct.some(d => d.m === m))
   // One sidecar per batch, one at a time; triage of later mail does not wait on it.

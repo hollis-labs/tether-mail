@@ -28,7 +28,7 @@ envelopes may carry it by default).
 | Class | How it is chosen | What happens |
 | --- | --- | --- |
 | `human` | `attention: human`, or the sender is the operator (`msg://user/...`); later, the sidecar's `needs_human` | a toast and a band line, `📬 [@sender → you] <subject> · /mail`; no turn; marked read when the human opens `/mail` (or when they ask the agent to handle it) |
-| `action` | envelope kind `question`, `decision`, `approval_request`, `escalation` or `handoff`; `awaiting` naming this seat (URN, handle, `TETHER_AGENT_NAME` or `TETHER_AGENT_LABEL`); untyped tool kind `request`, `escalation` or `handoff`; urgency `high`; the model says so; or any triage failure | a typed `question`/`decision`/`approval_request`, or mail asking for a decision or approval: one compact pointer turn, never the sidecar (below); anything else: a background sidecar session handles it (below) and the chat gets one band line, `📬 handled 1 mail: replied to @archie (skills list)`; no turn |
+| `action` | envelope kind `question`, `decision`, `approval_request`, `escalation` or `handoff`; `awaiting` naming this seat (URN, handle, `TETHER_AGENT_NAME` or `TETHER_AGENT_LABEL`); untyped tool kind `request`, `escalation` or `handoff`; urgency `high`; the model says so; or any triage failure | one compact pointer turn in the main session by default (below); only clearly routine mail goes to a background sidecar session, and the chat gets one band line, `📬 handled 1 mail: replied to @archie (skills list)`; no turn |
 | `read` | by rule only: `attention: none`, urgency `very-low`, or a pure ack (an ack/receipt kind, a bare message, or a `response`/`notice` whose body is only "thanks", "noted", "ack", "received" and the like) | marked read (`<cli> messages read <id> --as <urn>`); one line in the mail pane; no turn |
 | `fyi` | envelope kind `update` or `message` with no `awaiting`; tool kind `notice`, `status_update` or `response` at urgency `normal` or lower; or the model says `fyi` **or `read`** | listed in the mail pane and the band above the prompt; one line per FYI rides along as context on the user's next prompt, then it is marked read; no turn |
 
@@ -43,33 +43,42 @@ they are not lost, they stay unread on the hub. `/mail` opens the pane (unasked 
 The watcher passes `to`, `kind`, `attention`, `awaiting`, `urgency` (from Tether's metadata),
 `from_handle` and `to_handle` through when a message carries them, and the typed envelope's own kind
 (`payload.kind`) as `envelope_kind`, only for a typed envelope (content type
-`application/vnd.tether.envelope.v1+json`, set by the hub on `tether_message_post`; untyped mail never gets it); `@handle` falls back to the URN's last segment.
+`application/vnd.tether.envelope.v1+json`, set by the hub on `tether_message_post`; untyped mail never gets it), with its `intent` when it has one; `body` is every text field of the message (`body`, `payload.text`, ...); `@handle` falls back to the URN's last segment.
 
-### Action mail: the sidecar (CW-20261114-0018 follow-up)
-**A sidecar never decides.** It handles routine mail only: lookups, acknowledgements, small factual
-answers in the seat's own domain. It never makes a decision, approves or signs off on anything,
-commits the seat to a plan, or tells another agent what it may merge, deploy or own. (Incident: a
-sidecar answered an elevated-risk "(a) or (b)" design decision in a lead seat's name within 15
-seconds and added a wrong "merge and deploy as usual"; the human-facing session never saw it.)
-Two layers enforce this:
+### Action mail: main session by default, the sidecar only for routine mail (CW-20261114-0018)
+**A sidecar never decides.** (Incident: a sidecar answered an elevated-risk "(a) or (b)" design
+decision in a lead seat's name within 15 seconds and added a wrong "merge and deploy as usual"; the
+human-facing session never saw it.) So the default is inverted: **all action mail goes to the main
+session** as one compact pointer turn, and a background sidecar gets only mail that a narrow,
+deterministic allowlist calls clearly routine (`routineReason` in `claude/hooks/register.tsx`):
 
-- **By rule, before any sidecar.** Action mail goes straight to the main session as a compact
-  pointer turn, and the sidecar is never asked, when it is a typed envelope of kind `question`,
-  `decision` or `approval_request`, or when its subject or body asks for a decision: `decision`,
-  `decide`, `approve`/`approval`, `sign-off`, `your call`, `(a)/(b)` (or `(a) ... (b)`), `option a`,
-  `which option`, `pick one` / `choose between`, `recommend ... (R)`, `needs one call`. The match is
-  deliberately broad: a false match costs one line in the main session; a miss lets a background
-  session speak for the seat. The reason is logged in `/mail` (`<id>: kind decision; never the sidecar`).
-- **In the prompt.** The sidecar is told the same rule, and to set `needs_main_session=true`, not
-  reply and not mark read for any mail that needs a decision, approval, commitment or process
-  instruction, or when unsure.
+- **Always main:** kind `question`, `decision`, `approval_request`, `escalation` or `handoff` (typed
+  envelope or tool kind); `awaiting` naming this seat; urgency `high`; or any match of the decision
+  deny list in the subject or text: decide/decision/ruling, approve/sign-off/LGTM/authorize/permission,
+  go-ahead/go-no-go/greenlight/proceed/accept the risk, OK to/can I/may I/should we/your call/needs one
+  call, confirm (except "confirm receipt"), merge/deploy/ship/release/restart/rotate/delete/drop/migrate/
+  revert, ownership, option/choice/choose/pick/prefer/agree/recommend/yes-no, option lists (`(a) (b)`,
+  `1) 2)`, `A)` lines), and an "or" question.
+- **Sidecar only if, besides none of the above:** (a) a typed envelope whose sender sets `intent:
+  routine`; or (b) a short untyped `request` (200 characters of text or less) with a routine verb:
+  list, show, what is / what's, which file|version|path|host, ping, status of, confirm receipt, ack.
+- **Anything else:** main. The reason is logged in `/mail` (`<id>: kind escalation`, `<id>: asks for a
+  decision ("permission")`, `<id>: not clearly routine`).
+
+The text scanned is the subject plus every text field the message carries: untyped mail sent with
+`tether_message_send` has its text in `payload.text` (sometimes `payload.body`); the watcher folds
+`body`, `text`, `message` and `content` into `body` (all three watcher copies). The sidecar prompt
+states the same rule: routine requests only (lookups, acknowledgements, small factual answers in the
+seat's own domain); never decide, approve, commit the seat to a plan, tell another agent what it may
+merge, deploy or own, or give process instructions; otherwise set `needs_main_session=true`, do not
+reply, leave it unread.
 
 **Lead seats should turn the sidecar off.** A seat that leads a cell or decides for other agents
 (Archie and other cell leads) should set `TETHER_MAIL_SIDECAR=0` in its launch environment: then
 every action mail is a compact pointer turn in the main session, and no background session ever
 replies in its name.
 
-Other action mail never starts a turn in the main session. The mod runs one short-lived headless
+Routine mail never starts a turn in the main session. The mod runs one short-lived headless
 session per batch, `claude -p`, with `$.process.run` (the mods API runs host processes; no hook
 script or helper is needed):
 
