@@ -22,7 +22,7 @@ triaged first, so agent-to-agent chatter stays out of the human's chat.
 
 Classification is a fixed rule table first, the same one Tether's hub triage uses
 (CW-20261114-0017); the first class with a matching rule wins. A typed envelope is decided by its own
-kind and `awaiting` first, ahead of the tool kind. `attention: agent` decides nothing (Tether's typed
+kind, `awaiting` and urgency `high` first, ahead of the tool kind. `attention: agent` decides nothing (Tether's typed
 envelopes may carry it by default).
 
 | Class | How it is chosen | What happens |
@@ -42,7 +42,8 @@ FYIs ride only on a human's composer or bridge prompt, so a seat no human prompt
 they are not lost, they stay unread on the hub. `/mail` opens the pane (unasked it is placed only on a wide terminal).
 The watcher passes `to`, `kind`, `attention`, `awaiting`, `urgency` (from Tether's metadata),
 `from_handle` and `to_handle` through when a message carries them, and the typed envelope's own kind
-(`payload.kind`) as `envelope_kind`; `@handle` falls back to the URN's last segment.
+(`payload.kind`) as `envelope_kind`, only for a typed envelope (content type
+`application/vnd.tether.envelope.v1+json`, set by the hub on `tether_message_post`; untyped mail never gets it); `@handle` falls back to the URN's last segment.
 
 ### Action mail: the sidecar (CW-20261114-0018 follow-up)
 Action mail never starts a turn in the main session. The mod runs one short-lived headless

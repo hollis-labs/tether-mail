@@ -100,8 +100,8 @@ export const isPureAck = (m: Mail) => {
 // Deterministic triage: the same table as Tether's hub triage (CW-20261114-0017). A rule
 // that matches decides; the model is asked only when none does. `kind` is the tool kind
 // (request, notice, ...); `envelope_kind` is the typed envelope's kind (question,
-// update, ...); a `kind` holding an envelope value counts as one too. `attention: agent`
-// decides nothing: Tether's typed envelopes may carry it by default.
+// update, ...), which the watcher sets only for a typed envelope (its hub content type).
+// `attention: agent` decides nothing: Tether's typed envelopes may carry it by default.
 export type Rule = { cls: MailClass; reason: string }
 
 const ENVELOPE_ACTION = new Set(['question', 'decision', 'approval_request', 'escalation', 'handoff'])
@@ -134,7 +134,7 @@ export const classify = (m: Mail, self: readonly string[] = []): Rule | undefine
   const attention = low(m.attention)
   const kind = low(m.kind)
   const urgency = urgencyOf(m)
-  const env = low(m.envelope_kind) || (ENVELOPE_ACTION.has(kind) || ENVELOPE_FYI.has(kind) ? kind : '')
+  const env = low(m.envelope_kind)
   const awaited = !!bare(m.awaiting)
 
   if (attention === 'human') return { cls: 'human', reason: 'attention: human' }
@@ -144,6 +144,7 @@ export const classify = (m: Mail, self: readonly string[] = []): Rule | undefine
   if (env) {
     if (ENVELOPE_ACTION.has(env)) return { cls: 'action', reason: `kind ${env}` }
     if (awaitsMe(m, self)) return { cls: 'action', reason: `awaiting ${m.awaiting}` }
+    if (urgency === 'high') return { cls: 'action', reason: 'urgency high' }
     if (attention === 'none') return { cls: 'read', reason: 'attention: none' }
     if (ENVELOPE_FYI.has(env) && !awaited) return { cls: 'fyi', reason: `kind ${env}` }
   }

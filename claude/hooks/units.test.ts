@@ -237,8 +237,9 @@ test('requests, questions, decisions, escalations and handoffs are action by rul
   for (const kind of ['request', 'escalation', 'handoff', 'REQUEST']) expect(cls({ kind })).toBe('action')
   for (const envelope_kind of ['question', 'decision', 'approval_request', 'escalation', 'handoff']) {
     expect(cls({ kind: 'notice', envelope_kind })).toBe('action')
-    expect(cls({ kind: envelope_kind })).toBe('action')
   }
+  // A `kind` alone is the transport kind, never an envelope type.
+  expect(cls({ kind: 'question' })).toBeUndefined()
   // Action outranks every downgrade: none, very-low and an ack-only body.
   expect(cls({ kind: 'request', attention: 'none' })).toBe('action')
   expect(cls({ kind: 'request', urgency: 'very-low', body: 'thanks' })).toBe('action')
@@ -248,7 +249,7 @@ test('requests, questions, decisions, escalations and handoffs are action by rul
 test('mail awaiting this seat is action, however the seat is named', () => {
   const to = 'msg://agent/agent-mux/agt_me'
   for (const awaiting of ['@agt_me', 'agt_me', to, '@Archie', 'architect']) {
-    expect(cls({ to, kind: 'update', awaiting }, [to, 'architect', 'Archie'])).toBe('action')
+    expect(cls({ to, envelope_kind: 'update', awaiting }, [to, 'architect', 'Archie'])).toBe('action')
   }
   expect(cls({ kind: 'notice', awaiting: '@pm', to_handle: 'pm' })).toBe('action')
   expect(awaitsMe(mail({ to, awaiting: '@someone_else' }), [to])).toBe(false)
@@ -272,15 +273,26 @@ test('a typed envelope with attention: agent (Tether\'s default) is decided by i
   const to = 'msg://agent/agent-mux/agt_me'
   expect(cls({ to, kind: 'notice', envelope_kind: 'update', attention: 'agent', awaiting: '@agt_me' }, [to])).toBe('action')
   expect(cls({ kind: 'notice', envelope_kind: 'update', attention: 'none' })).toBe('read')
+  // Urgency high is an action rule for envelopes too (human > action > read > fyi).
+  expect(cls({ kind: 'status_update', envelope_kind: 'update', urgency: 'high' })).toBe('action')
+  expect(cls({ kind: 'notice', envelope_kind: 'message', urgency: 'high', attention: 'none' })).toBe('action')
   // Untyped mail keeps its rules whatever attention says.
   expect(cls({ kind: 'notice', attention: 'agent' })).toBe('fyi')
   expect(cls({ kind: 'request', attention: 'agent' })).toBe('action')
 })
 
+test('an untyped request stays action: the watcher gives untyped mail no envelope_kind', () => {
+  // What tests/test_fields.py has the watcher emit for an untyped request whose payload says kind:update.
+  const line = parseLine('{"id":"m1","from":"msg://agent/x/a","subject":"design","body":"b","kind":"request"}')!
+  expect(line.envelope_kind).toBeUndefined()
+  expect(classify(line)?.cls).toBe('action')
+  // Had the watcher passed it through, the envelope would have decided: the original bug.
+  expect(classify({ ...line, envelope_kind: 'update' })?.cls).toBe('fyi')
+})
+
 test('updates, notices, status updates and responses are fyi by rule', () => {
   expect(cls({ envelope_kind: 'update' })).toBe('fyi')
   expect(cls({ kind: 'notice', envelope_kind: 'message' })).toBe('fyi')
-  expect(cls({ kind: 'update' })).toBe('fyi')
   for (const kind of ['notice', 'status_update', 'response']) {
     for (const urgency of [undefined, 'low', 'normal']) expect(cls({ kind, urgency })).toBe('fyi')
   }

@@ -36,6 +36,8 @@ def fetch(cli, urn):
 
 
 RECHECK_LIMIT = 100
+# Tether stores typed envelopes with this content type (internal/messaging/envelope).
+ENVELOPE_CONTENT_TYPE = "application/vnd.tether.envelope.v1+json"
 
 
 def filter_unread(cli, urn, mails):
@@ -99,10 +101,12 @@ def to_mail(m):
         v = m.get(k) or meta.get(k) or p.get(k)
         if isinstance(v, str) and v:
             out[k] = v
-    # The typed envelope travels in the payload (payload_json) with its own `kind`
-    # (question, update, ...), apart from the tool kind (request, notice, ...) above.
+    # A typed envelope (tether_message_post) is stored with the hub-set content type
+    # ENVELOPE_CONTENT_TYPE and carries its own `kind` (question, update, ...) in the
+    # payload, apart from the transport kind (request, notice, ...) above. Only such a
+    # message gets envelope_kind: an untyped payload's `kind` is the sender's, not a type.
     ek = p.get("kind") if isinstance(p, dict) else None
-    if isinstance(ek, str) and ek:
+    if m.get("content_type") == ENVELOPE_CONTENT_TYPE and isinstance(ek, str) and ek:
         out["envelope_kind"] = ek
     return out
 
